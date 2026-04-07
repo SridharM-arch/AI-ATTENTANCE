@@ -1,0 +1,13 @@
+{
+  "name": "ai",
+  "version": "1.0.0",
+  "description": "This is a full-stack web application for real-time video conferencing with AI-powered face detection for attendance.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
