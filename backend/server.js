@@ -40,34 +40,69 @@ app.get("/favicon.ico", (req, res) => res.status(204));
 /* ---------------- MONGODB ---------------- */
 
 let dbConnected = false;
+let connectionRetries = 0;
+const MAX_RETRIES = 5;
 
-mongoose.connect(
-  process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/attendance-system"
-).then(() => {
-  dbConnected = true;
-  console.log("✓ MongoDB connected successfully");
-  mongoose.connection.db.collection("sessions").dropIndex("meetingId_1")
-    .then(() => {
+const connectMongoDB = async (retryCount = 0) => {
+  try {
+    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/attendance-system";
+    
+    console.log(`[DB Connection] Attempt ${retryCount + 1}/${MAX_RETRIES + 1}: ${mongoUri.substring(0, 50)}...`);
+    
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 10000
+    });
+    
+    dbConnected = true;
+    console.log("✓ MongoDB connected successfully");
+    
+    // Clean up obsolete indexes
+    try {
+      await mongoose.connection.db.collection("sessions").dropIndex("meetingId_1");
       console.log("Dropped obsolete index: meetingId_1");
-    })
-    .catch((indexErr) => {
+    } catch (indexErr) {
       if (indexErr.codeName !== "IndexNotFound") {
         console.log("Index cleanup warning:", indexErr.message);
       }
-    });
-}).catch(err => {
-  dbConnected = false;
-  console.error("✗ MongoDB connection failed:", err.message);
+    }
+  } catch (err) {
+    console.error(`✗ MongoDB connection failed (Attempt ${retryCount + 1}):`, err.message);
+    
+    if (retryCount < MAX_RETRIES) {
+      console.log(`Retrying in 3 seconds...`);
+      setTimeout(() => connectMongoDB(retryCount + 1), 3000);
+    } else {
+      console.error("[CRITICAL] MongoDB connection failed after max retries. Running in degraded mode.");
+      dbConnected = false;
+    }
+  }
+};
+
+// Start connection immediately
+connectMongoDB();
+
+// Monitor connection state
+mongoose.connection.on('connected', () => {
+  dbConnected = true;
+  console.log("✓ [Mongoose] Connection established");
 });
 
-/* Database Ready Middleware */
+mongoose.connection.on('disconnected', () => {
+  dbConnected = false;
+  console.warn("✗ [Mongoose] Connection disconnected");
+});
+
+mongoose.connection.on('error', (err) => {
+  dbConnected = false;
+  console.error("[Mongoose Error]", err.message);
+});
+
+/* Database Ready Middleware - Non-blocking */
 const checkDatabaseConnection = (req, res, next) => {
-  if (!dbConnected || mongoose.connection.readyState !== 1) {
-    console.warn(`Database not ready. State: ${mongoose.connection.readyState}`);
-    return res.status(503).json({ 
-      error: 'Database service unavailable', 
-      timestamp: new Date().toISOString() 
-    });
+  // Log but don't block - allow operations to attempt and handle errors naturally
+  if (!dbConnected) {
+    console.warn(`[AUTH] Database not ready (stat: ${mongoose.connection.readyState}). Request will attempt operation.`);
   }
   next();
 };

@@ -100,12 +100,23 @@ const endSessionById = async (sessionId) => {
 
 const initializeActiveSessionTimers = async () => {
   try {
-    const activeSessions = await Session.find({ isActive: true });
+    // Check if database is connected before querying
+    if (require('mongoose').connection.readyState !== 1) {
+      console.warn('[Sessions] Database not connected yet. Skipping session timer initialization.');
+      // Retry in 5 seconds
+      setTimeout(initializeActiveSessionTimers, 5000);
+      return;
+    }
+    
+    const activeSessions = await Session.find({ isActive: true }).maxTimeMS(3000);
+    console.log(`[Sessions] Initialized ${activeSessions.length} active session timers`);
     activeSessions.forEach((session) => {
       scheduleSessionEnd(session);
     });
   } catch (err) {
-    console.error('Failed to initialize session timers:', err);
+    console.error('[Sessions] Failed to initialize session timers:', err.message);
+    // Retry in 5 seconds
+    setTimeout(initializeActiveSessionTimers, 5000);
   }
 };
 

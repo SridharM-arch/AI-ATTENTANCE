@@ -74,6 +74,15 @@ router.post('/login', async (req, res) => {
   }
   
   try {
+    // Check if database is connected
+    if (User.collection.db.serverConfig.isConnected() === false) {
+      console.warn('[Login] Database connection not ready');
+      return res.status(503).json({ 
+        error: 'Database unavailable. Please try again in a moment.',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     let user;
     let searchCriteria = {};
     
@@ -85,7 +94,13 @@ router.post('/login', async (req, res) => {
     
     console.log('[Login Attempt]', { method: hostId ? 'hostId' : 'email', hostId: hostId || 'N/A', email: email || 'N/A' });
     
-    user = await User.findOne(searchCriteria);
+    // Set a timeout for the database query
+    const userPromise = User.findOne(searchCriteria);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Database query timeout')), 8000)
+    );
+    
+    user = await Promise.race([userPromise, timeoutPromise]);
     
     if (!user) {
       console.warn('[Login Failed] User not found', searchCriteria);
@@ -130,6 +145,14 @@ router.post('/login', async (req, res) => {
       stack: err.stack,
       email: req.body.email || 'N/A'
     });
+    
+    // Handle specific errors
+    if (err.message.includes('timeout') || err.message.includes('buffering')) {
+      return res.status(503).json({ 
+        error: 'Service temporarily unavailable. Please try again.',
+        timestamp: new Date().toISOString()
+      });
+    }
     
     res.status(500).json({ 
       error: 'Login failed. Please try again later.',
