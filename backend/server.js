@@ -23,7 +23,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Get CORS origins from environment, default to production Render URL
 const corsOrigins = process.env.CORS_ORIGINS 
   ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
-  : ['https://ai-attentance.onrender.com'];
+  : [
+      'https://connecttogether.vercel.app',
+      'http://localhost:5173'
+    ];
 
 app.use(cors({
   origin: corsOrigins,
@@ -179,7 +182,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("leave-room", (roomId, userId) => {
-    if (userId !== socket.userId) return;
+    if (userId !== socketA.userId) return;
     socket.leave(roomId);
     socket.to(roomId).emit("user-left", userId);
   });
