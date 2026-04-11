@@ -16,7 +16,12 @@ from reportlab.lib.styles import getSampleStyleSheet
 import tempfile
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://localhost:5000'])
+
+# Get CORS origins from environment variables, with sensible defaults
+cors_origins = os.environ.get('CORS_ORIGINS', 'https://ai-attentance.onrender.com').split(',')
+cors_origins = [origin.strip() for origin in cors_origins]
+
+CORS(app, origins=cors_origins)
 
 # Store known face encodings and student data
 known_faces = {}

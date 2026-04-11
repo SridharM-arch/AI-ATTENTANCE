@@ -52,7 +52,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const fetchSessions = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/sessions', getAuthHeaders());
+      const res = await axios.get('https://ai-attentance.onrender.com/api/sessions', getAuthHeaders());
       const currentUserId = user._id || user.id;
       const mySessions = res.data.filter((s: Session) => {
         const instructorId = s.instructor?._id || s.instructor?.id || (typeof s.instructor === 'string' ? s.instructor : undefined);
@@ -86,7 +86,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const fetchStudents = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/users/students', getAuthHeaders());
+      const res = await axios.get('https://ai-attentance.onrender.com/api/users/students', getAuthHeaders());
       setStudents(res.data.students || []);
     } catch (error) {
       setStudents([]);
@@ -97,7 +97,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
     if (!newSessionTitle.trim()) return;
 
     try {
-      const res = await axios.post('http://localhost:5000/api/sessions', {
+      const res = await axios.post('https://ai-attentance.onrender.com/api/sessions', {
         title: newSessionTitle,
         duration: newSessionDuration,
         minAttendanceType: newSessionMinType,
@@ -117,7 +117,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const endSession = async (sessionId: string) => {
     try {
-      await axios.post(`http://localhost:5000/api/sessions/${sessionId}/end`, {}, getAuthHeaders());
+      await axios.post(`https://ai-attentance.onrender.com/api/sessions/${sessionId}/end`, {}, getAuthHeaders());
       fetchSessions();
       toast.success('Session ended successfully');
     } catch (error) {
@@ -187,7 +187,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
     setSavingStudentId(true);
     try {
       const res = await axios.put(
-        'http://localhost:5000/api/users/update-id',
+        'https://ai-attentance.onrender.com/api/users/update-id',
         { userId, studentId: studentIdInput.trim() },
         getAuthHeaders()
       );
@@ -209,7 +209,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const fetchAttendance = async (sessionId: string) => {
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/${sessionId}`, getAuthHeaders());
+      const res = await axios.get(`https://ai-attentance.onrender.com/api/attendance/${sessionId}`, getAuthHeaders());
       
       const transformedAttendance = res.data.attendances.map((att: any) => ({
         studentId: att.studentId,
@@ -230,7 +230,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const fetchRequests = async (sessionId: string) => {
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/requests/${sessionId}`, getAuthHeaders());
+      const res = await axios.get(`https://ai-attentance.onrender.com/api/attendance/requests/${sessionId}`, getAuthHeaders());
       setAttendanceRequests(res.data.requests);
     } catch (error) {
       console.error('Failed to fetch requests:', error);
@@ -242,7 +242,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const handleApprove = async (requestId: string) => {
     try {
-      await axios.post('http://localhost:5000/api/attendance/approve', { requestId }, getAuthHeaders());
+      await axios.post('https://ai-attentance.onrender.com/api/attendance/approve', { requestId }, getAuthHeaders());
       // Refresh requests
       if (selectedSession) {
         fetchRequests(selectedSession._id);
@@ -254,7 +254,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const handleReject = async (requestId: string) => {
     try {
-      await axios.post('http://localhost:5000/api/attendance/reject', { requestId }, getAuthHeaders());
+      await axios.post('https://ai-attentance.onrender.com/api/attendance/reject', { requestId }, getAuthHeaders());
       // Refresh requests
       if (selectedSession) {
         fetchRequests(selectedSession._id);
@@ -267,7 +267,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
   const generatePDFReport = async (sessionId: string) => {
     try {
       const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      const response = await axios.get(`http://localhost:5000/api/attendance/report/${sessionId}`, {
+      const response = await axios.get(`https://ai-attentance.onrender.com/api/attendance/report/${sessionId}`, {
         ...config,
         responseType: 'blob'
       });
@@ -296,7 +296,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
         }
       };
 
-      await axios.post('http://localhost:5000/api/sessions', { 
+      await axios.post('https://ai-attentance.onrender.com/api/sessions', { 
         title: newSessionTitle,
         duration: newSessionDuration,
         minAttendanceType: newSessionMinType,
@@ -325,7 +325,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
         }
       };
 
-      await axios.post(`http://localhost:5000/api/sessions/${sessionId}/end`, {}, config);
+      await axios.post(`https://ai-attentance.onrender.com/api/sessions/${sessionId}/end`, {}, config);
       fetchSessions();
     } catch (error) {
       console.error('Failed to end session', error);
@@ -365,7 +365,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       };
 
       const userId = user._id || user.id;
-      await axios.post(`http://localhost:5000/api/users/${userId}/enroll-face`, { image }, config);
+      await axios.post(`https://ai-attentance.onrender.com/api/users/${userId}/enroll-face`, { image }, config);
       setFaceEnrolled(true);
       toast.success('Face enrolled successfully!');
     } catch (error: any) {

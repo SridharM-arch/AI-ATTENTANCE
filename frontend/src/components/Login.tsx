@@ -25,7 +25,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
       const data = isRegister ? { name, email, password, role } : { email, password };
-      const res = await axios.post(`http://localhost:5000${endpoint}`, data);
+      const res = await axios.post(`https://ai-attentance.onrender.com${endpoint}`, data);
       
       if (isRegister) {
         toast.success('Account created! Please sign in.');

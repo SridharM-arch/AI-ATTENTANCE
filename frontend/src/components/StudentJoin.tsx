@@ -29,7 +29,7 @@ const StudentJoin: React.FC<StudentJoinProps> = ({ onJoin, onBack }) => {
 
     try {
       const res = await axios.get(
-        `http://localhost:5000/api/sessions/public/join/${sessionCode.trim()}`
+        `https://ai-attentance.onrender.com/api/sessions/public/join/${sessionCode.trim()}`
       );
       setStatus('valid');
       toast.success('Session found! Joining...');

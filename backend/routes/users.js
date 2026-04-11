@@ -157,8 +157,8 @@ router.post('/:id/enroll-face', async (req, res) => {
     
     // Try to enroll with AI service
     try {
-      console.log('[ENROLL] Calling AI service at http://localhost:8000/enroll');
-      const response = await axios.post('http://localhost:8000/enroll', {
+      console.log('[ENROLL] Calling AI service at https://ai-attentance.onrender.com/enroll');
+      const response = await axios.post('https://ai-attentance.onrender.com/enroll', {
         userId: req.params.id,
         image
       }, { timeout: 30000 }); // 30 second timeout
@@ -228,7 +228,7 @@ router.post('/:id/upload-face', upload.single('image'), async (req, res) => {
     formData.append('image', fs.createReadStream(req.file.path));
     formData.append('userId', userId);
 
-    const response = await axios.post('http://localhost:8000/upload-face', formData, {
+    const response = await axios.post('https://ai-attentance.onrender.com/upload-face', formData, {
       headers: {
         ...formData.getHeaders()
       },

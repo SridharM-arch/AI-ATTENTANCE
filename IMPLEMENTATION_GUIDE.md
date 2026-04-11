@@ -157,7 +157,7 @@ Server starts on `http://localhost:8000`
 cd backend
 npm start
 ```
-Server starts on `http://localhost:5000`
+Server starts on `https://ai-attentance.onrender.com`
 
 ### Terminal 4: Start Frontend
 ```bash

@@ -84,7 +84,7 @@ echo ========================================
 echo.
 echo Service URLs:
 echo   Frontend:   http://localhost:5173
-echo   Backend:    http://localhost:5000
+echo   Backend:    https://ai-attentance.onrender.com
 echo   AI Service: http://localhost:8000
 echo.
 pause

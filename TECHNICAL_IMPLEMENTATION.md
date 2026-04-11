@@ -44,7 +44,7 @@ This document provides a technical summary of the face recognition attendance sy
 ```typescript
 // Socket authentication
 useEffect(() => {
-  socketRef.current = io('http://localhost:5000', {
+  socketRef.current = io('https://ai-attentance.onrender.com', {
     auth: { token: localStorage.getItem('token') }
   });
 }, []);
@@ -79,7 +79,7 @@ const captureAndSendFrame = async () => {
   
   // If face recognized, mark attendance
   if (data.detected && data.recognized_users.includes(user._id)) {
-    await axios.post('http://localhost:5000/api/attendance', {
+    await axios.post('https://ai-attentance.onrender.com/api/attendance', {
       session: session._id,
       user: user._id,
       faceVerified: true
@@ -117,7 +117,7 @@ const enrollFace = async () => {
     
     // Send to backend
     await axios.post(
-      `http://localhost:5000/api/users/${user._id}/enroll-face`,
+      `https://ai-attentance.onrender.com/api/users/${user._id}/enroll-face`,
       { image },
       { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
     );

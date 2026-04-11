@@ -1,6 +1,6 @@
 // Backend API Configuration
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
-const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://ai-attentance.onrender.com';
+const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || 'https://ai-attentance.onrender.com';
 
 export const API_CONFIG = {
   BACKEND_URL,

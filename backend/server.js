@@ -20,8 +20,13 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 /* ---------------- CORS ---------------- */
 
+// Get CORS origins from environment, default to production Render URL
+const corsOrigins = process.env.CORS_ORIGINS 
+  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+  : ['https://ai-attentance.onrender.com'];
+
 app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:5174"],
+  origin: corsOrigins,
   methods: ["GET", "POST"],
   credentials: true
 }));
@@ -65,7 +70,7 @@ app.use("/api/sessions", authenticateToken, sessionsRouter);
 /* ---------------- SOCKET.IO ---------------- */
 const io = socketIo(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://localhost:5174"],
+    origin: corsOrigins,
     methods: ["GET", "POST"]
   }
 });

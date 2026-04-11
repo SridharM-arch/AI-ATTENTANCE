@@ -35,7 +35,7 @@ const HostLogin = ({ onLogin, onBack }: Props) => {
         ? { name, email, password, role: 'host' }
         : { email, password };
 
-      const res = await fetch(`http://localhost:5000${endpoint}`, {
+      const res = await fetch(`https://ai-attentance.onrender.com${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

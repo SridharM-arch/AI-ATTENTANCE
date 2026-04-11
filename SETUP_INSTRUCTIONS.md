@@ -243,7 +243,7 @@ python app.py
 ```bash
 cd backend
 npm start
-# Listens on http://localhost:5000
+# Listens on https://ai-attentance.onrender.com
 ```
 
 **Terminal 4: Frontend**

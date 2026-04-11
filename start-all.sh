@@ -89,7 +89,7 @@ echo -e "${GREEN}═════════════════════
 echo ""
 echo "📍 Service URLs:"
 echo -e "  ${BLUE}Frontend:${NC}   http://localhost:5173"
-echo -e "  ${BLUE}Backend API:${NC}  http://localhost:5000"
+echo -e "  ${BLUE}Backend API:${NC}  https://ai-attentance.onrender.com"
 echo -e "  ${BLUE}AI Service:${NC}   http://localhost:8000"
 echo -e "  ${BLUE}MongoDB:${NC}      mongodb://localhost:27017"
 echo ""

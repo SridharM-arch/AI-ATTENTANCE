@@ -192,7 +192,7 @@ Authorization: Bearer `token`
 ### Check if services are running:
 ```bash
 # Backend on port 5000
-curl http://localhost:5000/api/users
+curl https://ai-attentance.onrender.com/api/users
 
 # Frontend on port 5173
 # Open http://localhost:5173 in browser
@@ -224,7 +224,7 @@ console.log(localStorage.getItem('token'))
 2. **Check browser console** (F12 → Console tab) for JavaScript errors
 3. **Verify token exists**: `localStorage.getItem('token')`
 4. **Verify all services running**:
-   - Backend: `http://localhost:5000/api/users`
+   - Backend: `https://ai-attentance.onrender.com/api/users`
    - Frontend: `http://localhost:5173`
    - AI Service: `http://localhost:8000/`
 5. **Check MongoDB connection**(backend startup logs should show "MongoDB connected")
