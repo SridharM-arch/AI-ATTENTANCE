@@ -39,10 +39,13 @@ app.get("/favicon.ico", (req, res) => res.status(204));
 
 /* ---------------- MONGODB ---------------- */
 
+let dbConnected = false;
+
 mongoose.connect(
-  process.env.MONGODB_URI || "mongodb://localhost:27017/attendance-system"
+  process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://localhost:27017/attendance-system"
 ).then(() => {
-  console.log("MongoDB connected");
+  dbConnected = true;
+  console.log("✓ MongoDB connected successfully");
   mongoose.connection.db.collection("sessions").dropIndex("meetingId_1")
     .then(() => {
       console.log("Dropped obsolete index: meetingId_1");
@@ -53,15 +56,28 @@ mongoose.connect(
       }
     });
 }).catch(err => {
-  console.log("MongoDB connection failed:", err.message);
+  dbConnected = false;
+  console.error("✗ MongoDB connection failed:", err.message);
 });
+
+/* Database Ready Middleware */
+const checkDatabaseConnection = (req, res, next) => {
+  if (!dbConnected || mongoose.connection.readyState !== 1) {
+    console.warn(`Database not ready. State: ${mongoose.connection.readyState}`);
+    return res.status(503).json({ 
+      error: 'Database service unavailable', 
+      timestamp: new Date().toISOString() 
+    });
+  }
+  next();
+};
 
 /* ---------------- ROUTES ---------------- */
 
 const authenticateToken = require("./middleware/auth");
 
-app.use("/api/users", require("./routes/users"));
-app.use("/api/auth", require("./routes/auth"));
+app.use("/api/users", checkDatabaseConnection, require("./routes/users"));
+app.use("/api/auth", checkDatabaseConnection, require("./routes/auth"));
 app.use("/api/attendance", authenticateToken, require("./routes/attendance"));
 app.use("/api/sessions/public", require("./routes/sessionsPublic"));
 const sessionsRouter = require("./routes/sessions");

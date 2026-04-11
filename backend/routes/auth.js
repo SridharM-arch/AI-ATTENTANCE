@@ -5,35 +5,113 @@ const User = require('../models/User');
 
 const router = express.Router();
 
+/* Request Validation Helper */
+const validateLoginRequest = (email, password, hostId) => {
+  const errors = [];
+  
+  if (!hostId && !email) {
+    errors.push('Email or hostId is required');
+  }
+  
+  if (!password) {
+    errors.push('Password is required');
+  }
+  
+  if (email && typeof email !== 'string') {
+    errors.push('Email must be a string');
+  }
+  
+  if (password && typeof password !== 'string') {
+    errors.push('Password must be a string');
+  }
+  
+  if (email && email.trim().length === 0) {
+    errors.push('Email cannot be empty');
+  }
+  
+  if (password && password.length === 0) {
+    errors.push('Password cannot be empty');
+  }
+  
+  return errors;
+};
+
 // Register
 router.post('/register', async (req, res) => {
   const { name, email, password, role } = req.body;
   try {
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Name, email, and password are required' });
+    }
+    
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({ name, email, password: hashedPassword, role });
     await user.save();
     res.status(201).json({ message: 'User registered', hostId: user.hostId });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error('[Register Error]', err);
+    
+    if (err.code === 11000) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+    
+    res.status(400).json({ error: err.message || 'Registration failed' });
   }
 });
 
 // Login (supports hostId for instructors)
 router.post('/login', async (req, res) => {
-  const { email, password, hostId } = req.body; // hostId for hosts, email for others
+  const { email, password, hostId } = req.body;
+  
+  // Validate request body
+  const validationErrors = validateLoginRequest(email, password, hostId);
+  if (validationErrors.length > 0) {
+    console.warn('[Login Validation Error]', validationErrors.join(', '));
+    return res.status(400).json({ 
+      error: validationErrors.join('; '),
+      timestamp: new Date().toISOString()
+    });
+  }
+  
   try {
     let user;
+    let searchCriteria = {};
+    
     if (hostId) {
-      user = await User.findOne({ hostId });
+      searchCriteria = { hostId };
     } else {
-      user = await User.findOne({ email });
+      searchCriteria = { email: email.toLowerCase().trim() };
     }
-    if (!user) return res.status(400).json({ error: 'User not found' });
+    
+    console.log('[Login Attempt]', { method: hostId ? 'hostId' : 'email', hostId: hostId || 'N/A', email: email || 'N/A' });
+    
+    user = await User.findOne(searchCriteria);
+    
+    if (!user) {
+      console.warn('[Login Failed] User not found', searchCriteria);
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        timestamp: new Date().toISOString()
+      });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+    if (!isMatch) {
+      console.warn('[Login Failed] Invalid password for user', { userId: user._id, email: user.email });
+      return res.status(401).json({ 
+        error: 'Invalid credentials',
+        timestamp: new Date().toISOString()
+      });
+    }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '1h' });
+    const token = jwt.sign(
+      { id: user._id, role: user.role }, 
+      process.env.JWT_SECRET || 'secret', 
+      { expiresIn: '1h' }
+    );
+    
+    console.log('[Login Success]', { userId: user._id, role: user.role, email: user.email });
+    
     res.json({
       token,
       user: {
@@ -47,7 +125,16 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[Login Server Error]', { 
+      message: err.message, 
+      stack: err.stack,
+      email: req.body.email || 'N/A'
+    });
+    
+    res.status(500).json({ 
+      error: 'Login failed. Please try again later.',
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
