@@ -59,7 +59,7 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
   // Attendance metrics for progress bar
   const [presentTime, setPresentTime] = useState(0);
   const [totalTime, setTotalTime] = useState(0);
-  const [participantsPresent, setParticipantsPresent] = useState(0);
+  const participantsPresent = 0; // Static value - not updated dynamically
   const [faceDetectionState, setFaceDetectionState] = useState<'detected' | 'processing' | 'not-detected'>('not-detected');
   const [faceCount, setFaceCount] = useState(0);
 

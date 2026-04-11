@@ -13,7 +13,7 @@ interface Participant {
 }
 
 interface ParticipantsGridProps {
-  myVideo: React.RefObject<HTMLVideoElement>;
+  myVideo: React.RefObject<HTMLVideoElement | null>;
   myName: string;
   isHost: boolean;
   peers: { [id: string]: Peer.Instance };
@@ -153,7 +153,7 @@ interface PeerVideoProps {
   videoRef: (ref: HTMLVideoElement) => void;
 }
 
-const PeerVideo: React.FC<PeerVideoProps> = ({ peer, peerId, metadata, videoRef }) => {
+const PeerVideo: React.FC<PeerVideoProps> = ({ peer, metadata, videoRef }) => {
   const videoEl = React.useRef<HTMLVideoElement>(null);
 
   React.useEffect(() => {
