@@ -1,0 +1,710 @@
+import React, { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Sun, Moon, Users, Calendar, TrendingUp, Crown, Camera, Upload, Edit3, Check, X, Play, Square, FileText } from 'lucide-react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
+import { useTheme } from './ThemeProvider';
+import type { Session, User, AttendanceRequest } from '../types';
+
+interface HostDashboardProps {
+  user: User;
+  onLogout: () => void;
+  onStartSession: (session: Session) => void;
+}
+
+interface AttendanceRecord {
+  studentId: string;
+  studentName: string;
+  timestamp: string;
+  status: string;
+  presentTime?: number;
+}
+
+const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSession }) => {
+  const { theme, toggleTheme } = useTheme();
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [newSessionTitle, setNewSessionTitle] = useState('');
+  const [newSessionDuration, setNewSessionDuration] = useState(60);
+  const [newSessionMinType, setNewSessionMinType] = useState<'minutes' | 'percentage'>('percentage');
+  const [newSessionMinValue, setNewSessionMinValue] = useState(75);
+  const [faceEnrolled, setFaceEnrolled] = useState(user.faceEnrolled || false);
+  const [enrolling, setEnrolling] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [students, setStudents] = useState<User[]>([]);
+  const [editingStudent, setEditingStudent] = useState<string | null>(null);
+  const [studentIdInput, setStudentIdInput] = useState('');
+  const [savingStudentId, setSavingStudentId] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<Session | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [showAttendance, setShowAttendance] = useState(false);
+  const [attendanceRequests, setAttendanceRequests] = useState<AttendanceRequest[]>([]);
+  const [showRequests, setShowRequests] = useState(false);
+  const [insights, setInsights] = useState({
+    totalParticipants: 0,
+    avgAttendance: 85,
+    totalSessions: 0,
+    activeSessions: 0
+  });
+
+  const getAuthHeaders = () => ({
+    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+  });
+
+  const fetchSessions = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/sessions', getAuthHeaders());
+      const currentUserId = user._id || user.id;
+      const mySessions = res.data.filter((s: Session) => {
+        const instructorId = s.instructor?._id || s.instructor?.id || (typeof s.instructor === 'string' ? s.instructor : undefined);
+        return instructorId === currentUserId;
+      });
+      setSessions(mySessions);
+    } catch (error) {
+      toast.error('Failed to fetch sessions');
+    }
+  };
+
+  const fetchInsights = () => {
+    const totalParticipants = sessions.reduce((sum, s) => sum + (s.participants?.length || 0), 0);
+    const activeSessions = sessions.filter((s) => s.isActive).length;
+    setInsights({
+      totalParticipants,
+      avgAttendance: 85,
+      totalSessions: sessions.length,
+      activeSessions
+    });
+  };
+
+  useEffect(() => {
+    fetchSessions();
+    fetchStudents();
+  }, []);
+
+  useEffect(() => {
+    fetchInsights();
+  }, [sessions]);
+
+  const fetchStudents = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/users/students', getAuthHeaders());
+      setStudents(res.data.students || []);
+    } catch (error) {
+      setStudents([]);
+    }
+  };
+
+  const createSession = async () => {
+    if (!newSessionTitle.trim()) return;
+
+    try {
+      const res = await axios.post('http://localhost:5000/api/sessions', {
+        title: newSessionTitle,
+        duration: newSessionDuration,
+        minAttendanceType: newSessionMinType,
+        minAttendanceValue: newSessionMinValue
+      }, getAuthHeaders());
+
+      await fetchSessions();
+      setNewSessionTitle('');
+      setNewSessionDuration(60);
+      setNewSessionMinType('percentage');
+      setNewSessionMinValue(75);
+      toast.success('Session created successfully!');
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to create session');
+    }
+  };
+
+  const endSession = async (sessionId: string) => {
+    try {
+      await axios.post(`http://localhost:5000/api/sessions/${sessionId}/end`, {}, getAuthHeaders());
+      fetchSessions();
+      toast.success('Session ended successfully');
+    } catch (error) {
+      toast.error('Failed to end session');
+    }
+  };
+
+  const enrollFace = async () => {
+    setEnrolling(true);
+    try {
+      // Face enrollment logic here
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate
+      setFaceEnrolled(true);
+      toast.success('Face enrolled successfully!');
+    } catch (error) {
+      toast.error('Face enrollment failed');
+    } finally {
+      setEnrolling(false);
+    }
+  };
+
+  const handleMultipleImageUpload = async (event: React.FormEvent<HTMLInputElement>) => {
+    const files = event.currentTarget.files;
+    if (!files || files.length === 0) return;
+
+    setUploading(true);
+    const formData = new FormData();
+
+    for (let i = 0; i < files.length; i++) {
+      formData.append('images', files[i]);
+    }
+
+    try {
+      const response = await axios.post('http://localhost:8000/upload-multiple', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (response.data.success) {
+        toast.success(`Successfully uploaded ${response.data.total_uploaded} student(s)!`);
+        if (response.data.total_failed > 0) {
+          toast.error(`Failed to upload ${response.data.total_failed} image(s).`);
+        }
+        fetchStudents();
+      } else {
+        toast.error('Upload failed: ' + response.data.error);
+      }
+    } catch (error) {
+      toast.error('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+      if (event.currentTarget) event.currentTarget.value = '';
+    }
+  };
+
+  const cardVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0 }
+  };
+
+  const startEditingStudentId = (userId: string, currentStudentId: string | undefined) => {
+    setEditingStudent(userId);
+    setStudentIdInput(currentStudentId || '');
+  };
+
+  const saveStudentId = async (userId: string) => {
+    if (!studentIdInput.trim()) return;
+    setSavingStudentId(true);
+    try {
+      const res = await axios.put(
+        'http://localhost:5000/api/users/update-id',
+        { userId, studentId: studentIdInput.trim() },
+        getAuthHeaders()
+      );
+      setStudents((prev) => prev.map((student) => student._id === userId ? res.data : student));
+      setEditingStudent(null);
+    } catch (error) {
+      console.error('Failed to update student ID:', error);
+      toast.error('Could not update student ID. Make sure it is unique.');
+    } finally {
+      setSavingStudentId(false);
+    }
+  };
+
+  const getAuthHeaders = () => ({
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem('token')}`
+    }
+  });
+
+  const fetchAttendance = async (sessionId: string) => {
+    try {
+      const res = await axios.get(`http://localhost:5000/api/attendance/${sessionId}`, getAuthHeaders());
+      
+      const transformedAttendance = res.data.attendances.map((att: any) => ({
+        studentId: att.studentId,
+        studentName: att.studentName || 'Unknown Student',
+        timestamp: att.timestamp,
+        status: att.status,
+        presentTime: att.presentTime
+      }));
+      
+      setAttendance(transformedAttendance);
+    } catch (error) {
+      console.error('Failed to fetch attendance:', error);
+      setAttendance([]);
+    } finally {
+      setShowAttendance(true);
+    }
+  };
+
+  const fetchRequests = async (sessionId: string) => {
+    try {
+      const res = await axios.get(`http://localhost:5000/api/attendance/requests/${sessionId}`, getAuthHeaders());
+      setAttendanceRequests(res.data.requests);
+    } catch (error) {
+      console.error('Failed to fetch requests:', error);
+      setAttendanceRequests([]);
+    } finally {
+      setShowRequests(true);
+    }
+  };
+
+  const handleApprove = async (requestId: string) => {
+    try {
+      await axios.post('http://localhost:5000/api/attendance/approve', { requestId }, getAuthHeaders());
+      // Refresh requests
+      if (selectedSession) {
+        fetchRequests(selectedSession._id);
+      }
+    } catch (error) {
+      console.error('Failed to approve:', error);
+    }
+  };
+
+  const handleReject = async (requestId: string) => {
+    try {
+      await axios.post('http://localhost:5000/api/attendance/reject', { requestId }, getAuthHeaders());
+      // Refresh requests
+      if (selectedSession) {
+        fetchRequests(selectedSession._id);
+      }
+    } catch (error) {
+      console.error('Failed to reject:', error);
+    }
+  };
+
+  const generatePDFReport = async (sessionId: string) => {
+    try {
+      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
+      const response = await axios.get(`http://localhost:5000/api/attendance/report/${sessionId}`, {
+        ...config,
+        responseType: 'blob'
+      });
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `attendance_report_${sessionId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      toast.error('Failed to generate PDF report. Please try again.');
+    }
+  };
+
+  const createSession = async () => {
+    if (!newSessionTitle.trim()) return;
+
+    try {
+      const config = {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`
+        }
+      };
+
+      await axios.post('http://localhost:5000/api/sessions', { 
+        title: newSessionTitle,
+        duration: newSessionDuration,
+        minAttendanceType: newSessionMinType,
+        minAttendanceValue: newSessionMinValue
+      }, config);
+      await fetchSessions();
+      setNewSessionTitle('');
+      setNewSessionDuration(60);
+      setNewSessionMinType('percentage');
+      setNewSessionMinValue(75);
+    } catch (error) {
+      console.error('Failed to create session', error);
+      if (axios.isAxiosError(error)) {
+        toast.error(error.response?.data?.error || 'Failed to create session');
+      } else {
+        toast.error('Failed to create session');
+      }
+    }
+  };
+
+  const endSession = async (sessionId: string) => {
+    try {
+      const config = {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`
+        }
+      };
+
+      await axios.post(`http://localhost:5000/api/sessions/${sessionId}/end`, {}, config);
+      fetchSessions();
+    } catch (error) {
+      console.error('Failed to end session', error);
+    }
+  };
+
+  const enrollFace = async () => {
+    const userId = user._id || user.id;
+    if (!userId) {
+      toast.error('User ID is not available. Please log in again.');
+      return;
+    }
+    setEnrolling(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      // Wait a bit for camera to adjust
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(video, 0, 0);
+
+      const image = canvas.toDataURL('image/jpeg').split(',')[1];
+
+      stream.getTracks().forEach(track => track.stop());
+
+      const config = {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`
+        }
+      };
+
+      const userId = user._id || user.id;
+      await axios.post(`http://localhost:5000/api/users/${userId}/enroll-face`, { image }, config);
+      setFaceEnrolled(true);
+      toast.success('Face enrolled successfully!');
+    } catch (error: any) {
+      console.error('Face enrollment failed:', error);
+      
+      // Extract detailed error message from response
+      let errorMsg = 'Face enrollment failed. Please try again.';
+      if (error.response?.data?.error) {
+        errorMsg = error.response.data.error;
+        if (error.response.data.code === 'AI_SERVICE_DOWN') {
+          errorMsg += '\n\nMake sure the Python AI service is running:\ncd ai-service && python app.py';
+        }
+      } else if (error.message) {
+        errorMsg = error.message;
+      }
+      
+      toast.error(errorMsg);
+    } finally {
+      setEnrolling(false);
+    }
+  };
+
+  const handleMultipleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploading(true);
+
+    try {
+      const formData = new FormData();
+
+      // Add all selected images
+      for (let i = 0; i < files.length; i++) {
+        formData.append('images', files[i]);
+      }
+
+      // Add student names (using filenames as default)
+      const studentNames = Array.from(files).map(file => file.name.split('.')[0]);
+      studentNames.forEach(name => formData.append('studentNames', name));
+
+      const response = await axios.post('http://localhost:8000/upload-multiple', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      if (response.data.success) {
+        toast.success(`Successfully uploaded ${response.data.total_uploaded} student(s)!`);
+        if (response.data.total_failed > 0) {
+          toast.error(`Failed to upload ${response.data.total_failed} image(s). Check console for details.`);
+        }
+        fetchStudents(); // Refresh student list
+      } else {
+        toast.error('Upload failed: ' + response.data.error);
+      }
+    } catch (error: any) {
+      console.error('Upload failed:', error);
+      toast.error('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+      if (event.target) event.target.value = '';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 p-6">
+      {/* Header */}
+      <motion.header
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex justify-between items-center mb-8"
+      >
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Host Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-300">Welcome back, {user.name}</p>
+        </div>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 hover:bg-white/20 transition-colors"
+          >
+            {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+          </button>
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={onLogout}
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors"
+          >
+            Logout
+          </motion.button>
+        </div>
+      </motion.header>
+
+      {/* Insights Cards */}
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={{ visible: { transition: { staggerChildren: 0.1 } } }}
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+      >
+        <motion.div
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-500/20 rounded-lg">
+              <Calendar className="w-6 h-6 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Sessions</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{insights.totalSessions}</p>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-green-500/20 rounded-lg">
+              <Users className="w-6 h-6 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Active Sessions</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{insights.activeSessions}</p>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-purple-500/20 rounded-lg">
+              <TrendingUp className="w-6 h-6 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Avg Attendance</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{insights.avgAttendance}%</p>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-orange-500/20 rounded-lg">
+              <Crown className="w-6 h-6 text-orange-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Participants</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{insights.totalParticipants}</p>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+
+      {/* Create Session Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg mb-8"
+      >
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Create New Session</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <input
+            type="text"
+            placeholder="Session title"
+            value={newSessionTitle}
+            onChange={(e) => setNewSessionTitle(e.target.value)}
+            className="px-4 py-2 bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <input
+            type="number"
+            placeholder="Duration (minutes)"
+            value={newSessionDuration}
+            onChange={(e) => setNewSessionDuration(Number(e.target.value))}
+            min="1"
+            className="px-4 py-2 bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <select
+            value={newSessionMinType}
+            onChange={(e) => setNewSessionMinType(e.target.value as 'minutes' | 'percentage')}
+            className="px-4 py-2 bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="percentage">Percentage</option>
+            <option value="minutes">Minutes</option>
+          </select>
+          <input
+            type="number"
+            placeholder={newSessionMinType === 'percentage' ? 'Min % (0-100)' : 'Min minutes'}
+            value={newSessionMinValue}
+            onChange={(e) => setNewSessionMinValue(Number(e.target.value))}
+            min="0"
+            max={newSessionMinType === 'percentage' ? '100' : undefined}
+            className="px-4 py-2 bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={createSession}
+            className="px-6 py-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl"
+          >
+            Create Session
+          </motion.button>
+        </div>
+      </motion.div>
+
+      {/* Face Enrollment Card */}
+      {!faceEnrolled && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg mb-8"
+        >
+          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Face Enrollment</h2>
+          <p className="text-gray-600 dark:text-gray-300 mb-4">Enroll your face for attendance recognition.</p>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={enrollFace}
+            disabled={enrolling}
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50"
+          >
+            <Camera className="w-5 h-5" />
+            {enrolling ? 'Enrolling...' : 'Enroll Face via Camera'}
+          </motion.button>
+        </motion.div>
+      )}
+
+      {/* Upload Students Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg mb-8"
+      >
+        <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Upload Student Images</h2>
+        <p className="text-gray-600 dark:text-gray-300 mb-4">Upload multiple student images for automatic attendance recognition.</p>
+        <div className="relative">
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleMultipleImageUpload}
+            disabled={uploading}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+          <motion.div
+            whileHover={{ scale: 1.02 }}
+            className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700 text-white rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer"
+          >
+            <Upload className="w-5 h-5" />
+            {uploading ? 'Uploading...' : 'Choose Images'}
+          </motion.div>
+        </div>
+      </motion.div>
+
+      {/* Sessions List */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.5 }}
+        className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-6 border border-white/20 shadow-lg"
+      >
+        <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Your Sessions</h2>
+        {sessions.length === 0 ? (
+          <p className="text-gray-600 dark:text-gray-300 text-center py-8">No sessions yet. Create one to get started.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {sessions.map((session) => (
+              <motion.div
+                key={session._id}
+                whileHover={{ scale: 1.02 }}
+                className="bg-white/50 dark:bg-gray-700/50 rounded-lg p-4 border border-white/20 shadow-md"
+              >
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="font-semibold text-gray-900 dark:text-white">{session.title}</h3>
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                    session.isActive
+                      ? 'bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100'
+                      : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100'
+                  }`}>
+                    {session.isActive ? 'Active' : 'Ended'}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">Room: {session.roomId}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">Participants: {session.participants?.length || 0}</p>
+                <div className="flex gap-2">
+                  {session.isActive ? (
+                    <>
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => onStartSession(session)}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200"
+                      >
+                        <Play className="w-4 h-4" />
+                        Start
+                      </motion.button>
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => endSession(session._id)}
+                        className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium text-sm transition-all duration-200"
+                      >
+                        <Square className="w-4 h-4" />
+                      </motion.button>
+                    </>
+                  ) : (
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {/* Show analytics */}}
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-medium text-sm transition-all duration-200"
+                    >
+                      <FileText className="w-4 h-4" />
+                      View Report
+                    </motion.button>
+                  )}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </motion.div>
+    </div>
+  );
+};
+
+export default HostDashboard;

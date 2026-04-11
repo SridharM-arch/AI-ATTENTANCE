@@ -1,7 +1,21 @@
 import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { LogOut, Users, Calendar, TrendingUp, Crown, Camera, Play, Square, FileText, Sun, Moon } from 'lucide-react';
 import axios from 'axios';
+import toast from 'react-hot-toast';
+import { useTheme } from './ThemeProvider';
+import { Card, StatCard, Button, Input, FileDropzone } from './ui';
+import { StudentCard } from './StudentCard';
+import { getBackendUrl, getAIServiceUrl } from '../config';
 import type { Session, User } from '../types';
-import './HostDashboard.css';
+
+interface Student {
+  id: string;
+  name: string;
+  studentId: string;
+  imagePreview: string;
+  timestamp: number;
+}
 
 interface HostDashboardProps {
   user: User;
@@ -9,33 +23,16 @@ interface HostDashboardProps {
   onStartSession: (session: Session) => void;
 }
 
-interface Student {
-  studentId: string;
-  name: string;
-  imagePath: string;
-}
-
-interface AttendanceRecord {
-  studentId: string;
-  studentName: string;
-  timestamp: string;
-  status: string;
-  presentTime?: number;
-}
-
 const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSession }) => {
+  const { theme, toggleTheme } = useTheme();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [newSessionDuration, setNewSessionDuration] = useState(60);
   const [newSessionMinType, setNewSessionMinType] = useState<'minutes' | 'percentage'>('percentage');
   const [newSessionMinValue, setNewSessionMinValue] = useState(75);
-  const [faceEnrolled, setFaceEnrolled] = useState(user.faceEnrolled || false);
   const [enrolling, setEnrolling] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [showAttendance, setShowAttendance] = useState(false);
+  const [enrolledStudents, setEnrolledStudents] = useState<Student[]>([]);
   const [insights, setInsights] = useState({
     totalParticipants: 0,
     avgAttendance: 85,
@@ -43,164 +40,156 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
     activeSessions: 0
   });
 
-  const fetchSessions = async () => {
-    try {
-      const config = {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
-      };
-      const res = await axios.get('http://localhost:5000/api/sessions', config);
-      const currentUserId = user._id || user.id;
-
-      const mySessions = res.data.filter((s: Session) => {
-        const instructorId =
-          s.instructor?._id ||
-          s.instructor?.id ||
-          (typeof s.instructor === 'string' ? s.instructor : undefined);
-
-        return instructorId === currentUserId;
-      });
-
-      setSessions(mySessions);
-    } catch (error) {
-      console.error('Failed to fetch sessions', error);
+  // Load students from localStorage on mount
+  useEffect(() => {
+    const savedStudents = localStorage.getItem(`students_${user._id || user.id}`);
+    if (savedStudents) {
+      try {
+        setEnrolledStudents(JSON.parse(savedStudents));
+      } catch (error) {
+        console.error('Failed to parse saved students:', error);
+      }
     }
+  }, [user._id, user.id]);
+
+  // Save students to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem(`students_${user._id || user.id}`, JSON.stringify(enrolledStudents));
+  }, [enrolledStudents, user._id, user.id]);
+
+  // Validation: Check if student ID already exists
+  const studentIdExists = (studentId: string, excludeId?: string): boolean => {
+    return enrolledStudents.some(
+      (s) => s.studentId === studentId && (!excludeId || s.id !== excludeId)
+    );
   };
 
-  const fetchInsights = () => {
-    const totalParticipants = sessions.reduce((sum, s) => sum + (s.participants?.length || 0), 0);
-    const activeSessions = sessions.filter((s) => s.isActive).length;
-
-    setInsights({
-      totalParticipants,
-      avgAttendance: 85,
-      totalSessions: sessions.length,
-      activeSessions
+  // Add or update student
+  const addStudent = (student: Student) => {
+    setEnrolledStudents((prevStudents) => {
+      const existingIndex = prevStudents.findIndex((s) => s.id === student.id);
+      if (existingIndex >= 0) {
+        // Update existing
+        const updated = [...prevStudents];
+        updated[existingIndex] = student;
+        return updated;
+      } else {
+        // Add new
+        return [...prevStudents, student];
+      }
     });
   };
 
-  useEffect(() => {
-    fetchSessions();
-    fetchStudents();
-  }, []);
+  // Delete student
+  const deleteStudent = (studentId: string) => {
+    setEnrolledStudents((prevStudents) =>
+      prevStudents.filter((s) => s.id !== studentId)
+    );
+    toast.success('Student deleted successfully');
+  };
 
-  useEffect(() => {
-    fetchInsights();
-  }, [sessions]);
-
-  const fetchStudents = async () => {
-    try {
-      const response = await axios.get('http://localhost:8000/get-students');
-      if (response.data.success) {
-        setStudents(response.data.students);
-      }
-    } catch (error) {
-      console.error('Failed to fetch students:', error);
+  // Update student handler (with validation)
+  const handleUpdateStudent = (updatedStudent: Student) => {
+    // Check for duplicate ID
+    if (studentIdExists(updatedStudent.studentId, updatedStudent.id)) {
+      toast.error('This Student ID is already in use');
+      return false;
     }
+    addStudent(updatedStudent);
+    toast.success('Student updated successfully');
+    return true;
+  };
+
+  // Check ID conflict
+  const checkIdConflict = (oldId: string, newId: string): boolean => {
+    if (oldId === newId) return false;
+    return studentIdExists(newId);
+  };
+
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { staggerChildren: 0.1, delayChildren: 0.2 }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.4 } }
   };
 
   const getAuthHeaders = () => ({
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem('token')}`
-    }
+    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
   });
 
-  const fetchAttendance = async (sessionId: string) => {
+  const fetchSessions = async () => {
     try {
-      const res = await axios.get(`http://localhost:5000/api/attendance/${sessionId}`, getAuthHeaders());
-      
-      const transformedAttendance = res.data.attendances.map((att: any) => ({
-        studentId: att.studentId,
-        studentName: att.studentName || 'Unknown Student',
-        timestamp: att.timestamp,
-        status: att.status,
-        presentTime: att.presentTime
-      }));
-      
-      setAttendance(transformedAttendance);
-    } catch (error) {
-      console.error('Failed to fetch attendance:', error);
-      setAttendance([]);
-    } finally {
-      setShowAttendance(true);
-    }
-  };
-
-  const generatePDFReport = async (sessionId: string) => {
-    try {
-      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      const response = await axios.get(`http://localhost:5000/api/attendance/report/${sessionId}`, {
-        ...config,
-        responseType: 'blob'
+      const res = await axios.get(`${getBackendUrl()}/api/sessions`, getAuthHeaders());
+      const currentUserId = user._id || user.id;
+      const mySessions = res.data.filter((s: Session) => {
+        const instructorId = s.instructor?._id || s.instructor?.id || (typeof s.instructor === 'string' ? s.instructor : undefined);
+        return instructorId === currentUserId;
       });
+      setSessions(mySessions);
 
-      // Create download link
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `attendance_report_${sessionId}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      // Update insights
+      const activeSessions = mySessions.filter((s: Session) => s.isActive).length;
+      const totalParticipants = mySessions.reduce((sum: number, s: Session) => sum + (s.participants?.length || 0), 0);
+
+      setInsights({
+        totalSessions: mySessions.length,
+        activeSessions,
+        avgAttendance: 85,
+        totalParticipants
+      });
     } catch (error) {
-      console.error('Failed to generate PDF:', error);
-      alert('Failed to generate PDF report. Please try again.');
+      console.error('Failed to fetch sessions:', error);
     }
   };
 
   const createSession = async () => {
-    if (!newSessionTitle.trim()) return;
+    if (!newSessionTitle.trim()) {
+      toast.error('Please enter a session title');
+      return;
+    }
 
     try {
-      const config = {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
-      };
-
-      await axios.post('http://localhost:5000/api/sessions', { 
+      await axios.post(`${getBackendUrl()}/api/sessions`, {
         title: newSessionTitle,
         duration: newSessionDuration,
         minAttendanceType: newSessionMinType,
         minAttendanceValue: newSessionMinValue
-      }, config);
+      }, getAuthHeaders());
+
       await fetchSessions();
       setNewSessionTitle('');
       setNewSessionDuration(60);
       setNewSessionMinType('percentage');
       setNewSessionMinValue(75);
+      toast.success('Session created successfully!');
     } catch (error) {
       console.error('Failed to create session', error);
       if (axios.isAxiosError(error)) {
-        alert(error.response?.data?.error || 'Failed to create session');
+        toast.error(error.response?.data?.error || 'Failed to create session');
       } else {
-        alert('Failed to create session');
+        toast.error('Failed to create session');
       }
     }
   };
 
   const endSession = async (sessionId: string) => {
     try {
-      const config = {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
-      };
-
-      await axios.post(`http://localhost:5000/api/sessions/${sessionId}/end`, {}, config);
+      await axios.post(`${getBackendUrl()}/api/sessions/${sessionId}/end`, {}, getAuthHeaders());
       fetchSessions();
+      toast.success('Session ended successfully!');
     } catch (error) {
       console.error('Failed to end session', error);
+      toast.error('Failed to end session');
     }
   };
 
   const enrollFace = async () => {
-    const userId = user._id || user.id;
-    if (!userId) {
-      alert('User ID is not available. Please log in again.');
-      return;
-    }
     setEnrolling(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -208,7 +197,6 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       video.srcObject = stream;
       await video.play();
 
-      // Wait a bit for camera to adjust
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       const canvas = document.createElement('canvas');
@@ -217,309 +205,484 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(video, 0, 0);
 
-      const image = canvas.toDataURL('image/jpeg').split(',')[1];
+      const imageDataUrl = canvas.toDataURL('image/jpeg');
 
       stream.getTracks().forEach(track => track.stop());
 
-      const config = {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
+      // Show prompt for name and ID
+      const studentName = prompt('Enter student name:');
+      if (!studentName) {
+        toast.error('Student name is required');
+        setEnrolling(false);
+        return;
+      }
+
+      const studentId = prompt('Enter student ID:');
+      if (!studentId) {
+        toast.error('Student ID is required');
+        setEnrolling(false);
+        return;
+      }
+
+      // Check for duplicate ID
+      if (studentIdExists(studentId)) {
+        toast.error('This Student ID is already in use');
+        setEnrolling(false);
+        return;
+      }
+
+      // Add student to enrolled list
+      const newStudent: Student = {
+        id: `student_${Date.now()}`,
+        name: studentName.trim(),
+        studentId: studentId.trim(),
+        imagePreview: imageDataUrl,
+        timestamp: Date.now()
       };
 
-      const userId = user._id || user.id;
-      await axios.post(`http://localhost:5000/api/users/${userId}/enroll-face`, { image }, config);
-      setFaceEnrolled(true);
-      alert('Face enrolled successfully!');
+      addStudent(newStudent);
+      toast.success('Student enrolled successfully!');
     } catch (error: any) {
       console.error('Face enrollment failed:', error);
-      
-      // Extract detailed error message from response
-      let errorMsg = 'Face enrollment failed. Please try again.';
-      if (error.response?.data?.error) {
-        errorMsg = error.response.data.error;
-        if (error.response.data.code === 'AI_SERVICE_DOWN') {
-          errorMsg += '\n\nMake sure the Python AI service is running:\ncd ai-service && python app.py';
-        }
-      } else if (error.message) {
-        errorMsg = error.message;
+      if (error.name === 'NotAllowedError') {
+        toast.error('Camera access denied. Please allow camera permissions.');
+      } else if (error.name === 'NotFoundError') {
+        toast.error('No camera found. Please connect a camera device.');
+      } else {
+        toast.error('Face enrollment failed. Please try again.');
       }
-      
-      alert(errorMsg);
     } finally {
       setEnrolling(false);
     }
   };
 
-  const handleMultipleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+  const handleMultipleImageUpload = async (files: FileList) => {
     if (!files || files.length === 0) return;
 
     setUploading(true);
 
     try {
-      const formData = new FormData();
-
-      // Add all selected images
+      // Create image previews and add as students
       for (let i = 0; i < files.length; i++) {
-        formData.append('images', files[i]);
+        const file = files[i];
+        const fileName = file.name.split('.')[0];
+
+        // Create preview URL
+        const fileReader = new FileReader();
+        fileReader.onload = (e) => {
+          const imageDataUrl = e.target?.result as string;
+
+          // Validate unique ID
+          if (studentIdExists(fileName)) {
+            toast.error(`Student ID "${fileName}" already exists. Skipping this file.`);
+            return;
+          }
+
+          // Create student
+          const newStudent: Student = {
+            id: `student_${Date.now()}_${i}`,
+            name: fileName,
+            studentId: fileName,
+            imagePreview: imageDataUrl,
+            timestamp: Date.now()
+          };
+
+          addStudent(newStudent);
+        };
+
+        fileReader.readAsDataURL(file);
       }
 
-      // Add student names (using filenames as default)
-      const studentNames = Array.from(files).map(file => file.name.split('.')[0]);
-      studentNames.forEach(name => formData.append('studentNames', name));
+      toast.success(`Added ${files.length} student image(s)!`);
 
-      const response = await axios.post('http://localhost:8000/upload-multiple', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
+      // Optional: Also upload to backend for face recognition
+      try {
+        const formData = new FormData();
+        for (let i = 0; i < files.length; i++) {
+          formData.append('images', files[i]);
         }
-      });
 
-      if (response.data.success) {
-        alert(`Successfully uploaded ${response.data.total_uploaded} student(s)!`);
-        if (response.data.total_failed > 0) {
-          alert(`Failed to upload ${response.data.total_failed} image(s). Check console for details.`);
-        }
-        fetchStudents(); // Refresh student list
-      } else {
-        alert('Upload failed: ' + response.data.error);
+        const studentNames = Array.from(files).map(file => file.name.split('.')[0]);
+        studentNames.forEach(name => formData.append('studentNames', name));
+
+        await axios.post(`${getAIServiceUrl()}/upload-multiple`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+      } catch (uploadError) {
+        console.warn('Could not upload to AI service, but images are saved locally:', uploadError);
       }
     } catch (error: any) {
       console.error('Upload failed:', error);
-      alert('Upload failed. Please try again.');
+      toast.error('Upload failed. Please try again.');
     } finally {
       setUploading(false);
-      if (event.target) event.target.value = '';
     }
   };
 
+  useEffect(() => {
+    fetchSessions();
+  }, [user._id, user.id]);
+
   return (
-    <div className="dashboard">
-      <header className="dashboard-header">
-        <div>
-          <h1>Host Dashboard</h1>
-          <p>Welcome back, {user.name}</p>
-        </div>
-        <button className="ghost-btn" onClick={onLogout}>
-          Logout
-        </button>
-      </header>
-
-      <div className="dashboard-content">
-        <section className="dashboard-card create-session">
-          <h2>Create Session</h2>
-          <p className="section-copy">Set a title and launch a new live room in seconds.</p>
-          <div className="inline-form">
-            <input
-              type="text"
-              placeholder="Session title"
-              value={newSessionTitle}
-              onChange={(e) => setNewSessionTitle(e.target.value)}
-            />
-            <input
-              type="number"
-              placeholder="Duration (minutes)"
-              value={newSessionDuration}
-              onChange={(e) => setNewSessionDuration(Number(e.target.value))}
-              min="1"
-            />
-            <select
-              value={newSessionMinType}
-              onChange={(e) => setNewSessionMinType(e.target.value as 'minutes' | 'percentage')}
-            >
-              <option value="percentage">Percentage</option>
-              <option value="minutes">Minutes</option>
-            </select>
-            <input
-              type="number"
-              placeholder={newSessionMinType === 'percentage' ? 'Min % (0-100)' : 'Min minutes'}
-              value={newSessionMinValue}
-              onChange={(e) => setNewSessionMinValue(Number(e.target.value))}
-              min="0"
-              max={newSessionMinType === 'percentage' ? '100' : undefined}
-            />
-            <button className="primary-btn" onClick={createSession}>
-              Create
-            </button>
-          </div>
-        </section>
-
-        {!faceEnrolled && (
-          <section className="dashboard-card face-enrollment">
-            <h2>Face Enrollment</h2>
-            <p className="section-copy">Enroll your face using your camera for attendance recognition.</p>
-            <button className="primary-btn" onClick={enrollFace} disabled={enrolling}>
-              {enrolling ? 'Enrolling with camera...' : 'Enroll Face via Camera'}
-            </button>
-          </section>
-        )}
-
-        <section className="dashboard-card student-upload">
-          <h2>Upload Student Images</h2>
-          <p className="section-copy">Upload multiple student images for automatic attendance recognition.</p>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleMultipleImageUpload}
-            disabled={uploading}
-            data-testid="multiple-upload-input"
-          />
-          <p style={{ fontSize: '0.85rem', color: '#777' }}>
-            Select multiple images at once. Student names will be derived from filenames.
-          </p>
-          {uploading && <p>Uploading...</p>}
-        </section>
-
-        {students.length > 0 && (
-          <section className="dashboard-card student-gallery">
-            <h2>Enrolled Students ({students.length})</h2>
-            <div className="student-grid">
-              {students.map((student) => (
-                <div key={student.studentId} className="student-card">
-                  <img
-                    src={`http://localhost:8000${student.imagePath}`}
-                    alt={student.name}
-                    className="student-image"
-                  />
-                  <div className="student-info">
-                    <h4>{student.name}</h4>
-                    <p>ID: {student.studentId}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="dashboard-card attendance-view">
-          <h2>View Attendance</h2>
-          <p className="section-copy">Select a session to view attendance records.</p>
-          <select
-            value={selectedSession?._id || ''}
-            onChange={(e) => {
-              const session = sessions.find(s => s._id === e.target.value);
-              setSelectedSession(session || null);
-            }}
-            className="session-select"
-          >
-            <option value="">Select a session...</option>
-            {sessions.map((session) => (
-              <option key={session._id} value={session._id}>
-                {session.title} ({session.participants?.length || 0} participants)
-              </option>
-            ))}
-          </select>
-          {selectedSession && (
-            <div className="attendance-actions">
-              <button
-                className="primary-btn"
-                onClick={() => fetchAttendance(selectedSession._id)}
-              >
-                View Attendance
-              </button>
-              <button
-                className="secondary-btn"
-                onClick={() => generatePDFReport(selectedSession._id)}
-              >
-                Generate PDF Report
-              </button>
-            </div>
-          )}
-        </section>
-
-        {showAttendance && (
-          <section className="dashboard-card attendance-list">
-            <h2>Attendance Records</h2>
-            {attendance.length === 0 ? (
-              <p className="empty-state">No attendance records found for this session.</p>
-            ) : (
-              <div className="attendance-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Student ID</th>
-                      <th>Student Name</th>
-                      <th>Present Time</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {attendance.map((record, index) => (
-                      <tr key={index}>
-                        <td data-label="Student ID">{record.studentId}</td>
-                        <td data-label="Student Name">{record.studentName}</td>
-                        <td data-label="Present Time">{record.presentTime ? `${Math.floor(record.presentTime / 60)}m ${record.presentTime % 60}s` : '0s'}</td>
-                        <td data-label="Status" className={`status-${record.status.toLowerCase()}`}>
-                          {record.status}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-
-        <section className="dashboard-card sessions">
-          <h2>Your Sessions</h2>
-          {sessions.length === 0 ? (
-            <p className="empty-state">No sessions yet. Create one to get started.</p>
-          ) : (
-            <ul className="session-list">
-              {sessions.map((session) => (
-                <li key={session._id} className="session-item">
-                  <div>
-                    <h3>{session.title}</h3>
-                    <p>Room: {session.roomId}</p>
-                    <p>Participants: {session.participants?.length || 0}</p>
-                    <p>Status: {session.isActive ? 'Active' : 'Ended'}</p>
-                  </div>
-                  <div className="session-actions">
-                    {session.isActive ? (
-                      <>
-                        <button className="primary-btn" onClick={() => onStartSession(session)}>
-                          Start
-                        </button>
-                        <button className="danger-btn" onClick={() => endSession(session._id)}>
-                          End
-                        </button>
-                      </>
-                    ) : (
-                      <span className="chip">Closed</span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="dashboard-card insights">
-          <h2>Insights</h2>
-          <div className="insight-grid">
-            <div className="insight-item">
-              <span>Total Sessions</span>
-              <strong>{insights.totalSessions}</strong>
-            </div>
-            <div className="insight-item">
-              <span>Active Sessions</span>
-              <strong>{insights.activeSessions}</strong>
-            </div>
-            <div className="insight-item">
-              <span>Total Participants</span>
-              <strong>{insights.totalParticipants}</strong>
-            </div>
-            <div className="insight-item">
-              <span>Avg Attendance</span>
-              <strong>{insights.avgAttendance}%</strong>
-            </div>
-          </div>
-        </section>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-900 to-slate-900 dark:from-gray-950 dark:via-slate-900 dark:to-gray-950">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 left-10 w-80 h-80 bg-indigo-500 rounded-full opacity-10 blur-3xl animate-pulse" />
+        <div className="absolute bottom-32 right-10 w-96 h-96 bg-purple-500 rounded-full opacity-10 blur-3xl animate-pulse" />
       </div>
+
+      {/* Header */}
+      <motion.header
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="sticky top-0 z-50 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 backdrop-blur-2xl bg-opacity-95 border-b border-purple-400/20 shadow-2xl"
+      >
+        <div className="max-w-7xl mx-auto px-6 py-5 flex justify-between items-center">
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
+            <h1 className="text-3xl font-bold text-white drop-shadow-lg">
+              📊 Attendance Hub
+            </h1>
+            <p className="text-purple-100 text-sm mt-1">Welcome back, {user.name}</p>
+          </motion.div>
+          <div className="flex items-center gap-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.3 }}
+              className="flex items-center gap-3 px-4 py-2 bg-white/10 backdrop-blur-md rounded-full border border-white/20 hover:bg-white/20 transition-all"
+            >
+              <div className="w-9 h-9 bg-gradient-to-br from-pink-400 to-purple-500 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-lg">
+                {user.name?.charAt(0).toUpperCase() || 'U'}
+              </div>
+              <span className="text-sm font-medium text-white">{user.name}</span>
+            </motion.div>
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={toggleTheme}
+              className="p-2.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all backdrop-blur-md border border-white/20"
+            >
+              {theme === 'light' ? (
+                <Moon className="w-5 h-5 text-white" />
+              ) : (
+                <Sun className="w-5 h-5 text-yellow-300" />
+              )}
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={onLogout}
+              className="px-4 py-2 rounded-lg bg-red-500/80 hover:bg-red-600 text-white font-semibold transition-all flex items-center gap-2 backdrop-blur-md border border-red-400/30"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </motion.button>
+          </div>
+        </div>
+      </motion.header>
+
+      {/* Main Content */}
+      <main className="relative max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {/* Stats Cards */}
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+        >
+          <motion.div variants={itemVariants}>
+            <StatCard
+              icon={<Calendar className="w-6 h-6 text-blue-300" />}
+              label="Total Sessions"
+              value={insights.totalSessions}
+              iconBgColor="bg-gradient-to-br from-blue-500/30 to-cyan-500/30"
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <StatCard
+              icon={<Users className="w-6 h-6 text-emerald-300" />}
+              label="Active Sessions"
+              value={insights.activeSessions}
+              iconBgColor="bg-gradient-to-br from-emerald-500/30 to-teal-500/30"
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <StatCard
+              icon={<TrendingUp className="w-6 h-6 text-purple-300" />}
+              label="Avg Attendance"
+              value={`${insights.avgAttendance}%`}
+              iconBgColor="bg-gradient-to-br from-purple-500/30 to-pink-500/30"
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <StatCard
+              icon={<Crown className="w-6 h-6 text-amber-300" />}
+              label="Total Participants"
+              value={insights.totalParticipants}
+              iconBgColor="bg-gradient-to-br from-amber-500/30 to-orange-500/30"
+            />
+          </motion.div>
+        </motion.div>
+
+        {/* Create Session Section */}
+        <motion.div variants={itemVariants} initial="hidden" animate="visible" transition={{ delay: 0.3 }}>
+          <Card>
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white drop-shadow-lg mb-2">✨ Create New Session</h2>
+                <p className="text-gray-300">Set up a new attendance session with your preferred settings</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <Input
+                  label="Session Title"
+                  placeholder="Enter session name"
+                  value={newSessionTitle}
+                  onChange={(e) => setNewSessionTitle(e.target.value)}
+                  required
+                />
+                <Input
+                  label="Duration (minutes)"
+                  type="number"
+                  placeholder="60"
+                  value={newSessionDuration}
+                  onChange={(e) => setNewSessionDuration(Number(e.target.value))}
+                  min={1}
+                />
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Attendance Type
+                  </label>
+                  <select
+                    value={newSessionMinType}
+                    onChange={(e) => setNewSessionMinType(e.target.value as 'minutes' | 'percentage')}
+                    className="w-full px-5 py-3 rounded-xl border border-gray-300 dark:border-white/30 bg-white dark:bg-gray-800 text-black dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:shadow-lg focus:shadow-purple-500/20 transition-all duration-300 font-medium hover:border-gray-400 dark:hover:border-white/40"
+                  >
+                    <option value="percentage" className="text-black bg-white">Percentage (%)</option>
+                    <option value="minutes" className="text-black bg-white">Minutes</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Minimum {newSessionMinType === 'percentage' ? 'Attendance (%)' : 'Duration (min)'}
+                </label>
+                <input
+                  type="number"
+                  placeholder={newSessionMinType === 'percentage' ? '0-100' : 'minutes'}
+                  value={newSessionMinValue}
+                  onChange={(e) => setNewSessionMinValue(Number(e.target.value))}
+                  min="0"
+                  max={newSessionMinType === 'percentage' ? '100' : undefined}
+                  className="w-full px-5 py-3 rounded-xl border border-gray-300 dark:border-white/30 bg-white dark:bg-gray-800 text-black dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:shadow-lg focus:shadow-purple-500/20 transition-all duration-300 ease-in-out font-medium hover:border-gray-400 dark:hover:border-white/40 caret-black dark:caret-white"
+                />
+              </div>
+
+              <Button
+                variant="primary"
+                fullWidth
+                onClick={createSession}
+              >
+                <Calendar className="w-5 h-5" />
+                Create Session
+              </Button>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* Face Enrollment & Upload in Grid */}
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          transition={{ delay: 0.4 }}
+          className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+        >
+          {/* Face Enrollment */}
+          <motion.div variants={itemVariants}>
+            <Card>
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Face Enrollment</h2>
+                  <p className="text-gray-600 dark:text-gray-400">Capture student face or enroll yourself</p>
+                </div>
+
+                <div className="p-8 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl border-2 border-dashed border-green-200 dark:border-green-800 text-center">
+                  <Camera className="w-12 h-12 text-green-600 dark:text-green-400 mx-auto mb-3" />
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Click the button below to capture a face</p>
+                </div>
+
+                <Button
+                  variant="success"
+                  fullWidth
+                  onClick={enrollFace}
+                  loading={enrolling}
+                  icon={<Camera className="w-5 h-5" />}
+                >
+                  {enrolling ? 'Capturing...' : 'Capture Face'}
+                </Button>
+              </div>
+            </Card>
+          </motion.div>
+
+          {/* Upload Students */}
+          <motion.div variants={itemVariants}>
+            <Card>
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Upload Student Images</h2>
+                  <p className="text-gray-600 dark:text-gray-400">Drag & drop or select multiple images</p>
+                </div>
+
+                <FileDropzone
+                  onFiles={handleMultipleImageUpload}
+                  multiple
+                  accept="image/*"
+                  disabled={uploading}
+                  loading={uploading}
+                />
+              </div>
+            </Card>
+          </motion.div>
+        </motion.div>
+
+        {/* Enrolled Students Section */}
+        {enrolledStudents.length > 0 && (
+          <motion.div
+            variants={itemVariants}
+            initial="hidden"
+            animate="visible"
+            transition={{ delay: 0.45 }}
+          >
+            <Card>
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">👥 Enrolled Students</h2>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    {enrolledStudents.length} student{enrolledStudents.length !== 1 ? 's' : ''} enrolled
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  <AnimatePresence>
+                    {enrolledStudents && enrolledStudents.length > 0 && enrolledStudents.map((student) => (
+                      student && student.id ? (
+                        <StudentCard
+                          key={student.id}
+                          student={student}
+                          isHost={true}
+                          onDelete={deleteStudent}
+                          onUpdate={handleUpdateStudent}
+                          onIdConflict={checkIdConflict}
+                        />
+                      ) : null
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Sessions List */}
+        <motion.div
+          variants={itemVariants}
+          initial="hidden"
+          animate="visible"
+          transition={{ delay: 0.5 }}
+        >
+          <Card>
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Your Sessions</h2>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {sessions.length === 0 ? 'No sessions yet' : `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}
+                </p>
+              </div>
+
+              {sessions.length === 0 ? (
+                <div className="text-center py-12">
+                  <Calendar className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                  <p className="text-gray-500 dark:text-gray-400">No sessions yet. Create one to get started!</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {sessions.map((session) => (
+                    <motion.div
+                      key={session._id}
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      whileHover={{ y: -4 }}
+                      className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600 hover:shadow-lg transition-all duration-300"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-start gap-2">
+                          <h3 className="font-semibold text-gray-900 dark:text-white pr-2">{session.title}</h3>
+                          <motion.span
+                            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${
+                              session.isActive
+                                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                                : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'
+                            }`}
+                          >
+                            {session.isActive ? '● Active' : 'Ended'}
+                          </motion.span>
+                        </div>
+
+                        <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 p-3 rounded-lg">
+                          <p><span className="font-medium">Room ID:</span> {session.roomId}</p>
+                          <p><span className="font-medium">Duration:</span> {session.duration} min</p>
+                          <p><span className="font-medium">Participants:</span> {session.participants?.length || 0}</p>
+                        </div>
+
+                        <div className="flex gap-2 pt-2">
+                          {session.isActive ? (
+                            <>
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => onStartSession(session)}
+                                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md"
+                              >
+                                <Play className="w-4 h-4" />
+                                Join
+                              </motion.button>
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => endSession(session._id)}
+                                className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md"
+                              >
+                                <Square className="w-4 h-4" />
+                              </motion.button>
+                            </>
+                          ) : (
+                            <motion.button
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md"
+                            >
+                              <FileText className="w-4 h-4" />
+                              Report
+                            </motion.button>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+        </motion.div>
+      </main>
     </div>
   );
 };
 
 export default HostDashboard;
+

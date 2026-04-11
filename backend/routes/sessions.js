@@ -2,13 +2,114 @@ const express = require("express");
 const crypto = require("crypto");
 const Session = require("../models/Session");
 const Participant = require("../models/Participant");
+const Attendance = require("../models/Attendance");
 
 const router = express.Router();
 const MAX_ROOM_ID_RETRIES = 5;
+const sessionEndTimers = new Map();
+let ioInstance = null;
 
 function generateRoomId() {
   return crypto.randomBytes(8).toString("hex");
 }
+
+function setSocketIo(io) {
+  ioInstance = io;
+}
+
+const getRemainingTimeMs = (session) => {
+  const endTime = session.endTime
+    ? new Date(session.endTime).getTime()
+    : (session.startTime ? new Date(session.startTime).getTime() : Date.now()) + (session.duration || 0) * 60000;
+  return Math.max(endTime - Date.now(), 0);
+};
+
+const scheduleSessionEnd = async (session) => {
+  if (!session || !session._id || !session.isActive) return;
+
+  if (!session.endTime && session.startTime && session.duration) {
+    session.endTime = new Date(new Date(session.startTime).getTime() + session.duration * 60000);
+    await session.save();
+  }
+
+  const remaining = getRemainingTimeMs(session);
+
+  if (sessionEndTimers.has(session._id.toString())) {
+    clearTimeout(sessionEndTimers.get(session._id.toString()));
+    sessionEndTimers.delete(session._id.toString());
+  }
+
+  if (remaining <= 0) {
+    await endSessionById(session._id.toString());
+    return;
+  }
+
+  const timer = setTimeout(async () => {
+    await endSessionById(session._id.toString());
+  }, remaining);
+
+  sessionEndTimers.set(session._id.toString(), timer);
+};
+
+const endSessionById = async (sessionId) => {
+  const session = await Session.findById(sessionId);
+  if (!session || !session.isActive) {
+    return null;
+  }
+
+  session.isActive = false;
+  session.status = 'ended';
+  session.endTime = session.endTime || new Date();
+  await session.save();
+
+  let requiredTime = 0;
+  if (session.minAttendanceType === 'percentage') {
+    requiredTime = (session.minAttendanceValue / 100) * session.duration * 60;
+  } else {
+    requiredTime = session.minAttendanceValue * 60;
+  }
+
+  const attendances = await Attendance.find({ sessionId: session._id });
+  const bulkOps = attendances.map((att) => ({
+    updateOne: {
+      filter: { _id: att._id },
+      update: {
+        status: att.presentTime >= requiredTime ? 'Present' : 'Absent'
+      }
+    }
+  }));
+
+  if (bulkOps.length > 0) {
+    await Attendance.bulkWrite(bulkOps);
+  }
+
+  if (ioInstance && session.roomId) {
+    ioInstance.to(session.roomId).emit('session-ended', {
+      sessionId: session._id,
+      roomId: session.roomId
+    });
+  }
+
+  if (sessionEndTimers.has(session._id.toString())) {
+    clearTimeout(sessionEndTimers.get(session._id.toString()));
+    sessionEndTimers.delete(session._id.toString());
+  }
+
+  return session;
+};
+
+const initializeActiveSessionTimers = async () => {
+  try {
+    const activeSessions = await Session.find({ isActive: true });
+    activeSessions.forEach((session) => {
+      scheduleSessionEnd(session);
+    });
+  } catch (err) {
+    console.error('Failed to initialize session timers:', err);
+  }
+};
+
+setTimeout(initializeActiveSessionTimers, 3000);
 
 /* ================= CREATE SESSION ================= */
 router.post("/", async (req, res) => {
@@ -48,19 +149,25 @@ router.post("/", async (req, res) => {
 
     for (let attempt = 0; attempt < MAX_ROOM_ID_RETRIES; attempt += 1) {
       try {
+        const startTime = new Date();
+        const endTime = new Date(startTime.getTime() + duration * 60000);
+
         const session = new Session({
           title: title.trim(),
           instructor: req.user.id,
           roomId: generateRoomId(),
           isActive: true,
+          status: 'active',
           participants: [],
-          startTime: new Date(),
+          startTime,
+          endTime,
           duration: duration,
           minAttendanceType: minAttendanceType,
           minAttendanceValue: minAttendanceValue
         });
 
         await session.save();
+        await scheduleSessionEnd(session);
         return res.status(201).json(session);
       } catch (saveErr) {
         const isRoomIdDuplicate =
@@ -206,43 +313,15 @@ router.post("/:id/end", async (req, res) => {
       return res.status(403).json({ error: "Only hosts/instructors can end sessions" });
     }
 
-    const session = await Session.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false, endTime: new Date() },
-      { new: true }
-    );
+    const session = await endSessionById(req.params.id);
 
     if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    // Calculate required time
-    let requiredTime;
-    if (session.minAttendanceType === 'percentage') {
-      requiredTime = (session.minAttendanceValue / 100) * session.duration * 60; // convert to seconds
-    } else {
-      requiredTime = session.minAttendanceValue * 60; // convert to seconds
-    }
-
-    // Finalize attendance using the new attendance system
-    const axios = require('axios');
-    try {
-      await axios.post(`http://localhost:5000/api/attendance/finalize/${req.params.id}`, {
-        requiredTime: requiredTime
-      }, {
-        headers: {
-          Authorization: req.headers.authorization || ''
-        }
-      });
-    } catch (finalizeErr) {
-      console.error('Failed to finalize attendance:', finalizeErr.message);
-      // Continue with session ending even if finalization fails
+      return res.status(404).json({ error: "Session not found or already ended" });
     }
 
     res.json({
       success: true,
-      session: session,
-      requiredTime: requiredTime,
+      session,
       message: 'Session ended and attendance finalized'
     });
   } catch (err) {
@@ -250,5 +329,7 @@ router.post("/:id/end", async (req, res) => {
     res.status(500).json({ error: "Server error while ending session" });
   }
 });
+
+router.setSocketIo = setSocketIo;
 
 module.exports = router;

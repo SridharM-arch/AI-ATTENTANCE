@@ -30,6 +30,12 @@ const sessionSchema = new mongoose.Schema({
     default: true
   },
 
+  status: {
+    type: String,
+    enum: ['active', 'ended'],
+    default: 'active'
+  },
+
   participants: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: "Participant"

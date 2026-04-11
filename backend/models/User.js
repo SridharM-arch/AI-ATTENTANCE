@@ -4,8 +4,10 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, enum: ['host', 'instructor'], default: 'host' },
+  role: { type: String, enum: ['host', 'instructor', 'student'], default: 'student' },
   hostId: { type: String, unique: true, sparse: true }, // Unique for instructors
+  studentId: { type: String, unique: true, sparse: true },
+  imagePath: { type: String },
   faceData: { type: String }, // Base64 encoded face image or embedding
   faceEnrolled: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }

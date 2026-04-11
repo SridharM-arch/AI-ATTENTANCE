@@ -54,6 +54,7 @@
   flex-direction: column;
   padding: 1rem;
   gap: 1rem;
+  position: relative;
 }
 
 .video-grid {
@@ -99,9 +100,122 @@
   border-radius: 50%;
 }
 
+.meeting-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.08);
+}
+
+.summary-left {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.summary-pill {
+  background: rgba(15, 45, 67, 0.85);
+  color: #f8fbff;
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.emoji-toolbar {
+  display: inline-flex;
+  gap: 0.65rem;
+}
+
+.emoji-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.16);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.emoji-btn:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.reaction-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.floating-reaction {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: float-up 3.2s ease forwards;
+  font-size: 2rem;
+  user-select: none;
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -120px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -220px) scale(0.95);
+  }
+}
+
 .attendance-indicator.present {
   background: #20c07a;
   box-shadow: 0 0 0 4px rgba(32, 192, 122, 0.2);
+}
+
+.attendance-request {
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  text-align: center;
+}
+
+.attendance-request h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  color: #0f2f43;
+}
+
+.attendance-request p {
+  margin: 0.5rem 0;
+  color: #27475c;
+}
+
+.request-btn {
+  padding: 0.5rem 1rem;
+  background: #0f8b8d;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.request-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
 }
 
 .controls {
