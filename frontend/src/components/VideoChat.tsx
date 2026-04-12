@@ -102,6 +102,34 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     toast.success('Session has ended');
   };
 
+  const captureAndSendFrame = async () => {
+  if (!myVideo.current || !user._id) return;
+
+  // simulate detection
+  setFaceDetectionState('detected');
+  setFaceCount(1);
+
+  // simulate attendance time
+  setPresentTime((prev) => prev + 10);
+  setTotalTime((prev) => prev + 10);
+
+  try {
+    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
+      studentId: user._id,
+      sessionId: session._id,
+      timeIncrement: 10
+    }, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token')}`
+      }
+    });
+
+    setStatusMessage('✅ Attendance tracking (demo mode)');
+  } catch (err) {
+    console.error(err);
+  }
+};
+
   const createPeer = (userToSignal: string, callerID: string, currentStream: MediaStream) => {
     const peer = new Peer({ initiator: true, trickle: false, stream: currentStream });
     peer.on('signal', (signal: Peer.SignalData) => {
