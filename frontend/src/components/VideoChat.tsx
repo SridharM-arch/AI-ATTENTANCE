@@ -447,6 +447,33 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     });
   };
 
+const captureAndSendFrame = async () => {
+  if (!myVideo.current || !user._id) return;
+
+  // simulate detection (for demo)
+  setFaceDetectionState('detected');
+  setFaceCount(1);
+
+  // simulate attendance update
+  setPresentTime((prev) => prev + 10);
+  setTotalTime((prev) => prev + 10);
+
+  try {
+    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
+      studentId: user._id,
+      sessionId: session._id,
+      timeIncrement: 10
+    }, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+    });
+
+    setStatusMessage('✅ Attendance tracking (demo mode)');
+  } catch (error) {
+    console.error(error);
+  }
+};
+  
+
   const requestAttendance = async () => {
     if (requesting) return;
     setRequesting(true);
