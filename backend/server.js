@@ -20,16 +20,26 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 /* ---------------- CORS ---------------- */
 
-// Get CORS origins from environment, default to production Render URL
+/* ---------------- CORS ---------------- */
+
 const corsOrigins = process.env.CORS_ORIGINS 
   ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
   : [
-      'https://connectogether.vercel.app',
-      'http://localhost:5173'
+      "https://connectogether.vercel.app",   // ✅ correct frontend URL
+      "http://localhost:5173"
     ];
 
 app.use(cors({
-  origin: "*",
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps, curl)
+    if (!origin) return callback(null, true);
+
+    if (corsOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS: " + origin));
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
