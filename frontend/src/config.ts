@@ -2,6 +2,8 @@
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://ai-attentance.onrender.com';
 const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || 'https://ai-attentance.onrender.com';
 
+
+
 export const API_CONFIG = {
   BACKEND_URL,
   AI_SERVICE_URL,
@@ -11,4 +13,9 @@ export const API_CONFIG = {
 // Get the actual URLs being used
 export const getBackendUrl = () => BACKEND_URL;
 export const getSocketUrl = () => API_CONFIG.SOCKET_URL;
-export const getAIServiceUrl = () => AI_SERVICE_URL;
+// export const getAIServiceUrl = () => AI_SERVICE_URL;
+
+// config.ts
+export const getAIServiceUrl = () => {
+  return import.meta.env.VITE_AI_SERVICE_URL || 'https://ai-attentance.onrender.com';
+};
