@@ -403,62 +403,6 @@ const captureAndSendFrame = async () => {
   }
 };
 
-    const canvas = document.createElement('canvas');
-    canvas.width = myVideo.current.videoWidth;
-    canvas.height = myVideo.current.videoHeight;
-
-    const ctx = canvas.getContext('2d');
-    ctx?.drawImage(myVideo.current, 0, 0);
-
-    canvas.toBlob(async (blob) => {
-      if (!blob) return;
-
-      const formData = new FormData();
-      formData.append('image', blob, 'frame.jpg');
-
-      try {
-        setFaceDetectionState('processing');
-        const { data } = await axios.post(`${getAIServiceUrl()}/recognize`, formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          }
-        });
-
-        if (data.success && data.recognized_users && data.recognized_users.length > 0) {
-          setFaceCount(data.recognized_users.length);
-          setFaceDetectionState('detected');
-          
-          // Check if current user is recognized
-          if (data.recognized_users.includes(user._id)) {
-            // Update present time
-            setPresentTime((prev) => prev + 10);
-            
-            // Update attendance in backend
-            await axios.post(`${getBackendUrl()}/api/attendance/update`, {
-              studentId: user._id,
-              sessionId: session._id,
-              timeIncrement: 10
-            }, {
-              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-            });
-
-            setStatusMessage('✅ Face detected - Tracking attendance');
-          } else {
-            setStatusMessage('❌ Face not recognized - Please ensure good lighting and positioning');
-          }
-        } else {
-          setFaceCount(0);
-          setFaceDetectionState('not-detected');
-          setStatusMessage('❌ No face detected - Please face the camera');
-        }
-      } catch (error) {
-        console.log('Face recognition error:', error);
-        setFaceDetectionState('not-detected');
-        setStatusMessage('Face recognition service unavailable');
-      }
-    }, 'image/jpeg', 0.8);
-  };
-
   const emitReaction = (emoji: string) => {
     if (!joined || !roomId) return;
     socketRef.current.emit('reaction', {
@@ -467,6 +411,7 @@ const captureAndSendFrame = async () => {
       sender: user.name
     });
   };
+
   const requestAttendance = async () => {
     if (requesting) return;
     setRequesting(true);
