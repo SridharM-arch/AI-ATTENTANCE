@@ -102,34 +102,6 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     toast.success('Session has ended');
   };
 
-  const captureAndSendFrame = async () => {
-  if (!myVideo.current || !user._id) return;
-
-  // simulate detection
-  setFaceDetectionState('detected');
-  setFaceCount(1);
-
-  // simulate attendance time
-  setPresentTime((prev) => prev + 10);
-  setTotalTime((prev) => prev + 10);
-
-  try {
-    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
-      studentId: user._id,
-      sessionId: session._id,
-      timeIncrement: 10
-    }, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('token')}`
-      }
-    });
-
-    setStatusMessage('✅ Attendance tracking (demo mode)');
-  } catch (err) {
-    console.error(err);
-  }
-};
-
   const createPeer = (userToSignal: string, callerID: string, currentStream: MediaStream) => {
     const peer = new Peer({ initiator: true, trickle: false, stream: currentStream });
     peer.on('signal', (signal: Peer.SignalData) => {
@@ -403,12 +375,33 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     };
   }, [stream, user.role, user._id, roomId]);
 
-  const captureAndSendFrame = async () => {
-    if (!myVideo.current || !user._id) return;
-    if (myVideo.current.videoWidth === 0) return;
+const captureAndSendFrame = async () => {
+  if (!myVideo.current || !user._id) return;
 
-    // Update total time every capture interval
-    setTotalTime((prev) => prev + 10);
+  // simulate detection
+  setFaceDetectionState('detected');
+  setFaceCount(1);
+
+  // simulate attendance time
+  setPresentTime((prev) => prev + 10);
+  setTotalTime((prev) => prev + 10);
+
+  try {
+    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
+      studentId: user._id,
+      sessionId: session._id,
+      timeIncrement: 10
+    }, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token')}`
+      }
+    });
+
+    setStatusMessage('✅ Attendance tracking (demo mode)');
+  } catch (err) {
+    console.error(err);
+  }
+};
 
     const canvas = document.createElement('canvas');
     canvas.width = myVideo.current.videoWidth;
@@ -474,34 +467,6 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       sender: user.name
     });
   };
-
-const captureAndSendFrame = async () => {
-  if (!myVideo.current || !user._id) return;
-
-  // simulate detection (for demo)
-  setFaceDetectionState('detected');
-  setFaceCount(1);
-
-  // simulate attendance update
-  setPresentTime((prev) => prev + 10);
-  setTotalTime((prev) => prev + 10);
-
-  try {
-    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
-      studentId: user._id,
-      sessionId: session._id,
-      timeIncrement: 10
-    }, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-    });
-
-    setStatusMessage('✅ Attendance tracking (demo mode)');
-  } catch (error) {
-    console.error(error);
-  }
-};
-  
-
   const requestAttendance = async () => {
     if (requesting) return;
     setRequesting(true);
