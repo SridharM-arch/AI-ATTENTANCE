@@ -24,7 +24,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 const corsOrigins = process.env.CORS_ORIGINS 
   ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
   : [
-      'https://connecttogether.vercel.app',
+      'https://connectogether.vercel.app',
       'http://localhost:5173'
     ];
 
