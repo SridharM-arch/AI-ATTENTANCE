@@ -28,9 +28,16 @@ const StudentJoin: React.FC<StudentJoinProps> = ({ onJoin, onBack }) => {
     setLoading(true);
 
     try {
-      const res = await axios.get(
-        `https://ai-attentance.onrender.com/api/sessions/public/join/${sessionCode.trim()}`
-      );
+    const token = localStorage.getItem("token");
+
+    const res = await axios.get(
+      `https://ai-attentance.onrender.com/api/sessions/public/join/${sessionCode.trim()}`,
+      {
+       headers: {
+          Authorization: `Bearer ${token}`
+        }
+     }
+    );
       setStatus('valid');
       toast.success('Session found! Joining...');
       setTimeout(() => onJoin(res.data), 500);
