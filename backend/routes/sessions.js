@@ -344,3 +344,28 @@ router.post("/:id/end", async (req, res) => {
 router.setSocketIo = setSocketIo;
 
 module.exports = router;
+/* ================= PUBLIC JOIN ================= */
+router.get("/public/join/:code", async (req, res) => {
+  try {
+    const session = await Session.findOne({ roomId: req.params.code });
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (!session.isActive) {
+      return res.status(400).json({ error: "Session is not active" });
+    }
+
+    res.json({
+      success: true,
+      sessionId: session._id,
+      roomId: session.roomId,
+      message: "Session found"
+    });
+
+  } catch (err) {
+    console.error("Public join error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});

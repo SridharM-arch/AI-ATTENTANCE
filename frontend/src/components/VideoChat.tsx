@@ -156,8 +156,21 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     if (!targetRoomId) return;
 
     try {
-      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      const response = await axios.post(`${getBackendUrl()}/api/sessions/${session._id}/join`, {}, config);
+// Step 1: Check session (PUBLIC)
+const res = await axios.get(
+  `${getBackendUrl()}/api/sessions/public/join/${targetRoomId}`
+);
+
+// Step 2: Join session (PRIVATE with token)
+const config = { 
+  headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } 
+};
+
+const response = await axios.post(
+  `${getBackendUrl()}/api/sessions/${res.data.sessionId}/join`,
+  {},
+  config
+);
       console.log('Join session response:', response.data);
 
       socketRef.current.emit('join-room', targetRoomId, user._id);

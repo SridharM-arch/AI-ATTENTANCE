@@ -21,15 +21,13 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 /* ---------------- CORS ---------------- */
 
 // Get CORS origins from environment, default to production Render URL
-const corsOrigins = process.env.CORS_ORIGINS 
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
-  : [
-      'https://connectogether.vercel.app',
-      'http://localhost:5173'
-    ];
+const cors = require("cors");
 
 app.use(cors({
-  origin: "*",
+  origin: [
+    "https://connectogether.vercel.app",
+    "http://localhost:5173"
+  ],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
