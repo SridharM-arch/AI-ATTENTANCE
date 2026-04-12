@@ -75,13 +75,7 @@ router.post('/login', async (req, res) => {
   
   try {
     // Check if database is connected
-    if (User.collection.db.serverConfig.isConnected() === false) {
-      console.warn('[Login] Database connection not ready');
-      return res.status(503).json({ 
-        error: 'Database unavailable. Please try again in a moment.',
-        timestamp: new Date().toISOString()
-      });
-    }
+
     
     let user;
     let searchCriteria = {};
