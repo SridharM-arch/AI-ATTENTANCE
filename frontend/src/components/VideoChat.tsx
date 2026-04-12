@@ -374,33 +374,77 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       socketRef.current.off();
     };
   }, [stream, user.role, user._id, roomId]);
-
 const captureAndSendFrame = async () => {
   if (!myVideo.current || !user._id) return;
+  if (myVideo.current.videoWidth === 0) return;
 
-  // simulate detection
-  setFaceDetectionState('detected');
-  setFaceCount(1);
-
-  // simulate attendance time
-  setPresentTime((prev) => prev + 10);
   setTotalTime((prev) => prev + 10);
 
-  try {
-    await axios.post(`${getBackendUrl()}/api/attendance/update`, {
-      studentId: user._id,
-      sessionId: session._id,
-      timeIncrement: 10
-    }, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('token')}`
-      }
-    });
+  const canvas = document.createElement('canvas');
+  canvas.width = myVideo.current.videoWidth;
+  canvas.height = myVideo.current.videoHeight;
 
-    setStatusMessage('✅ Attendance tracking (demo mode)');
-  } catch (err) {
-    console.error(err);
-  }
+  const ctx = canvas.getContext('2d');
+  ctx?.drawImage(myVideo.current, 0, 0);
+
+  canvas.toBlob(async (blob) => {
+    if (!blob) return;
+
+    const formData = new FormData();
+    formData.append('image', blob, 'frame.jpg');
+
+    try {
+      setFaceDetectionState('processing');
+
+      const aiUrl = getAIServiceUrl();
+      
+      // Check if AI service URL is valid before calling
+      if (!aiUrl || aiUrl.includes('undefined')) {
+        setFaceDetectionState('not-detected');
+        setStatusMessage('⚠️ AI service not configured');
+        return;
+      }
+
+      const { data } = await axios.post(`${aiUrl}/api/recognize`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 8000, // 8 second timeout
+      });
+
+      if (data.success && data.recognized_users && data.recognized_users.length > 0) {
+        setFaceCount(data.recognized_users.length);
+        setFaceDetectionState('detected');
+
+        if (data.recognized_users.includes(user._id)) {
+          setPresentTime((prev) => prev + 10);
+
+          await axios.post(
+            `${getBackendUrl()}/api/attendance/update`,
+            { studentId: user._id, sessionId: session._id, timeIncrement: 10 },
+            { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+          );
+
+          setStatusMessage('✅ Face detected - Tracking attendance');
+        } else {
+          setStatusMessage('❌ Face not recognized - Ensure good lighting');
+        }
+      } else {
+        setFaceCount(0);
+        setFaceDetectionState('not-detected');
+        setStatusMessage('❌ No face detected - Please face the camera');
+      }
+    } catch (error: any) {
+      setFaceDetectionState('not-detected');
+
+      if (error.response?.status === 404) {
+        console.warn('AI recognition endpoint not found (404). Check AI service route.');
+        setStatusMessage('⚠️ Face recognition unavailable (service offline)');
+      } else if (error.code === 'ECONNABORTED') {
+        setStatusMessage('⚠️ Face recognition timed out');
+      } else {
+        setStatusMessage('⚠️ Face recognition service unavailable');
+      }
+    }
+  }, 'image/jpeg', 0.8);
 };
 
   const emitReaction = (emoji: string) => {
