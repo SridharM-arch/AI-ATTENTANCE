@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+// import axios from 'axios';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ArrowLeft, LogIn, Loader } from 'lucide-react';
@@ -15,32 +15,28 @@ const StudentJoin: React.FC<StudentJoinProps> = ({ onJoin, onBack }) => {
   const [status, setStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
 
-    if (!sessionCode.trim()) {
-      setStatus('invalid');
-      toast.error('Please enter a session code');
-      return;
-    }
+  if (!sessionCode.trim()) {
+    toast.error("Please enter a session code");
+    return;
+  }
 
-    setStatus('checking');
-    setLoading(true);
+  setLoading(true);
 
-    try {
-    const res = await axios.get(
-      `https://ai-attentance.onrender.com/api/sessions/public/join/${sessionCode.trim()}`,
-    );
-      setStatus('valid');
-      toast.success('Session found! Joining...');
-      setTimeout(() => onJoin(res.data), 500);
-    } catch (error) {
-      setStatus('invalid');
-      toast.error('Invalid code. Enter a valid Room ID or Host ID.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  setStatus('valid');
+  toast.success('Joining session...');
+
+  setTimeout(() => {
+    onJoin({
+      _id: sessionCode,
+      roomId: sessionCode
+    } as any);
+  }, 500);
+
+  setLoading(false);
+};
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-800 flex items-center justify-center p-4 relative overflow-hidden">
