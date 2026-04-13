@@ -4,7 +4,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const http = require("http");
-const socketIo = require("socket.io");
+const { initSocketIO } = require("./socket");
 const jwt = require("jsonwebtoken");
 const path = require("path");
 const fs = require("fs");
@@ -121,41 +121,22 @@ const sessionsRouter = require("./routes/sessions");
 app.use("/api/sessions", authenticateToken, sessionsRouter);
 
 /* ---------------- SOCKET.IO ---------------- */
-const io = socketIo(server, {
-  cors: {
-    origin: corsOrigins,
-    methods: ["GET", "POST"]
-  }
-});
+const io = initSocketIO(server);
+
 app.set('io', io);
 
 if (typeof sessionsRouter.setSocketIo === 'function') {
   sessionsRouter.setSocketIo(io);
 }
 
-io.use(async (socket, next) => {
-  const token = socket.handshake.auth.token;
-  if (!token) return next(new Error('Authentication error'));
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-    socket.userId = decoded.id;
-    next();
-  } catch (err) {
-    next(new Error('Authentication error'));
-  }
-});
+/* ============ ATTENDANCE REQUEST HANDLERS ============ */
 
-/* ============ IN-MEMORY STORES ============ */
+// In-memory attendance requests store
 const attendanceRequests = {}; // sessionId -> { requests: [], approvals: {} }
-const roomUsers = new Map(); // roomId -> Map<userId, { socketId, userId, joinedAt }>
 
 function getSessionRequests(sessionId) {
   if (!attendanceRequests[sessionId]) {
-    attendanceRequests[sessionId] = {
-      requests: [],
-      approvals: {}
-    };
+    attendanceRequests[sessionId] = { requests: [], approvals: {} };
   }
   return attendanceRequests[sessionId];
 }
@@ -170,139 +151,9 @@ function removeRequest(sessionId, studentId) {
   session.requests = session.requests.filter(r => r.studentId !== studentId);
 }
 
-function getRoomUsers(roomId) {
-  if (!roomUsers.has(roomId)) {
-    roomUsers.set(roomId, new Map());
-  }
-  return roomUsers.get(roomId);
-}
-
-function addUserToRoom(roomId, userId, socketId) {
-  const users = getRoomUsers(roomId);
-  users.set(userId, { socketId, userId, joinedAt: new Date() });
-}
-
-function removeUserFromRoom(roomId, userId) {
-  const users = getRoomUsers(roomId);
-  users.delete(userId);
-  if (users.size === 0) {
-    roomUsers.delete(roomId);
-  }
-}
-
-function getAllRoomUsers(roomId) {
-  const users = getRoomUsers(roomId);
-  return Array.from(users.values());
-}
-
-/* ============ END STORE ============ */
-
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id, "User:", socket.userId);
-  socket.currentRoom = null;
-
-  // ============ ROOM MANAGEMENT ============
-  socket.on("join-room", (data) => {
-    const { roomId, userId, userInfo } = data;
-    if (userId !== socket.userId) return; // Security check
-
-    // Leave previous room if any
-    if (socket.currentRoom && socket.currentRoom !== roomId) {
-      socket.leave(socket.currentRoom);
-      removeUserFromRoom(socket.currentRoom, userId);
-      socket.to(socket.currentRoom).emit("user-left", { userId, roomId: socket.currentRoom });
-    }
-
-    // Join new room
-    socket.join(roomId);
-    socket.currentRoom = roomId;
-    addUserToRoom(roomId, userId, socket.id);
-
-    console.log(`User ${userId} joined room ${roomId}`);
-
-    // Get all users in room (excluding current user)
-    const roomUsersList = getAllRoomUsers(roomId).filter(u => u.userId !== userId);
-
-    // Notify current user about existing participants
-    socket.emit("room-joined", {
-      roomId,
-      userId,
-      participants: roomUsersList,
-      message: "Joined room successfully"
-    });
-
-    // Notify others about new user
-    socket.to(roomId).emit("user-joined", {
-      userId,
-      socketId: socket.id,
-      userInfo: userInfo || { userId, role: 'student' },
-      timestamp: new Date()
-    });
-  });
-
-  socket.on("leave-room", (data) => {
-    const { roomId, userId } = data;
-    if (userId !== socket.userId) return;
-
-    socket.leave(roomId);
-    removeUserFromRoom(roomId, userId);
-    socket.currentRoom = null;
-
-    socket.to(roomId).emit("user-left", { userId, roomId, timestamp: new Date() });
-    console.log(`User ${userId} left room ${roomId}`);
-  });
-
-  // ============ WEBRTC SIGNALING ============
-  // Handle WebRTC Offer
-  socket.on("offer", (payload) => {
-    const { targetUserId, offer, userId } = payload;
-    if (userId !== socket.userId) return;
-
-    console.log(`Relaying offer from ${userId} to ${targetUserId}`);
-    io.to(targetUserId).emit("offer", {
-      from: userId,
-      offer,
-      fromSocketId: socket.id
-    });
-  });
-
-  // Handle WebRTC Answer
-  socket.on("answer", (payload) => {
-    const { targetUserId, answer, userId } = payload;
-    if (userId !== socket.userId) return;
-
-    console.log(`Relaying answer from ${userId} to ${targetUserId}`);
-    io.to(targetUserId).emit("answer", {
-      from: userId,
-      answer
-    });
-  });
-
-  // Handle ICE Candidates
-  socket.on("ice-candidate", (payload) => {
-    const { targetUserId, candidate, userId } = payload;
-    if (userId !== socket.userId) return;
-
-    io.to(targetUserId).emit("ice-candidate", {
-      from: userId,
-      candidate
-    });
-  });
-
-  // Legacy signaling support (for backward compatibility)
-  socket.on("sending-signal", (payload) => {
-    io.to(payload.userToSignal).emit("receiving-signal", {
-      from: socket.userId,
-      signal: payload.signal
-    });
-  });
-
-  socket.on("returning-signal", (payload) => {
-    io.to(payload.callerID).emit("receiving-returned-signal", {
-      id: socket.userId,
-      signal: payload.signal
-    });
-  });
+// Attendance-related socket events
+io.on('connection', (socket) => {
+  console.log('[Attendance] Socket connected:', socket.id);
 
   socket.on("attendance-marked", async (data) => {
     if (data.userId !== socket.userId) return;
@@ -513,20 +364,6 @@ io.on("connection", (socket) => {
 
   /* ============ END ATTENDANCE REQUEST HANDLERS ============ */
 
-  socket.on('disconnect', () => {
-    console.log("User disconnected:", socket.id, "User:", socket.userId);
-
-    // Remove user from current room
-    if (socket.currentRoom && socket.userId) {
-      removeUserFromRoom(socket.currentRoom, socket.userId);
-      socket.to(socket.currentRoom).emit("user-left", {
-        userId: socket.userId,
-        roomId: socket.currentRoom,
-        timestamp: new Date(),
-        reason: 'disconnect'
-      });
-    }
-  });
 });
 
 /* ---------------- ROOT ---------------- */

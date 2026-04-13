@@ -1,118 +1,260 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Camera, CameraOff, X, BarChart3, UserX, Info, LogOut, Settings } from 'lucide-react';
-import axios from 'axios';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import { Mic, MicOff, Camera, CameraOff, PhoneOff, Users, Crown } from 'lucide-react';
 import io from 'socket.io-client';
 import toast from 'react-hot-toast';
-import { PendingRequests } from './PendingRequests';
-import { FaceDetectionOverlay } from './FaceDetectionOverlay';
-import { AttendanceProgressBar } from './AttendanceProgressBar';
-import { getSocketUrl, getAIServiceUrl, getBackendUrl } from '../config';
+import { getSocketUrl } from '../config';
 import type { Session, User } from '../types';
 
-interface AttendanceRequest {
-  id: string;
-  studentId: string;
-  studentName: string;
-  sessionId: string;
-  timestamp: string;
-  status: string;
+// =====================================================
+// TYPES
+// =====================================================
+interface VideoChatProps {
+  user: User;
+  session: Session;
+  onLogout: () => void;
+  onLeave: () => void;
 }
 
-interface ParticipantInfo {
+interface Participant {
   userId: string;
   socketId: string;
   userInfo: {
-    userId: string;
-    role: string;
     name?: string;
+    role?: string;
   };
+  stream?: MediaStream | null;
 }
 
-const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }> = ({
-  user,
-  session,
-  onLogout
+// =====================================================
+// VIDEO TILE COMPONENT - Memoized to prevent re-renders
+// =====================================================
+interface VideoTileProps {
+  stream: MediaStream | null;
+  userId: string;
+  isLocal: boolean;
+  isHost: boolean;
+  name: string;
+  isMainView?: boolean;
+  onClick?: () => void;
+}
+
+const VideoTile = React.memo<VideoTileProps>(({
+  stream,
+  userId,
+  isLocal,
+  isHost,
+  name,
+  isMainView,
+  onClick
 }) => {
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [roomId, setRoomId] = useState('');
-  const [joined, setJoined] = useState(false);
-  const [micOn, setMicOn] = useState(true);
-  const [camOn, setCamOn] = useState(true);
-  const [showPanel, setShowPanel] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string>('Initializing...');
-  const [finalAttendance, setFinalAttendance] = useState<{ presentTime: number; status: string } | null>(null);
-  const [requestStatus, setRequestStatus] = useState<'idle' | 'sent' | 'approved' | 'rejected'>('idle');
-  const [requesting, setRequesting] = useState(false);
-  const [participantsCount, setParticipantsCount] = useState(1);
-  const [sessionRemaining, setSessionRemaining] = useState<number | null>(null);
-  const [sessionEnded, setSessionEnded] = useState(false);
-  const [reactions, setReactions] = useState<Array<{ id: string; emoji: string; sender: string }>>([]);
-  const [pendingRequests, setPendingRequests] = useState<AttendanceRequest[]>([]);
-  const [analytics, setAnalytics] = useState({
-    totalParticipants: 0,
-    activeParticipants: 0,
-    avgAttendance: 0,
-    sessionDuration: null as number | null,
-    activeNow: false
-  });
-  const [presentTime, setPresentTime] = useState(0);
-  const [totalTime, setTotalTime] = useState(0);
-  const [faceDetectionState, setFaceDetectionState] = useState<'detected' | 'processing' | 'not-detected'>('not-detected');
-  const [faceCount, setFaceCount] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  // ZOOM-LIKE LAYOUT STATE
+  // CRITICAL: Only set srcObject once when stream changes
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      console.log(`[VIDEO] Setting stream for ${name} (${userId})`);
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream, userId, name]);
+
+  return (
+    <motion.div
+      layoutId={`video-${userId}`}
+      onClick={onClick}
+      className={`relative overflow-hidden rounded-2xl bg-gray-900 cursor-pointer transition-all duration-300 ${
+        isMainView
+          ? 'w-full h-full shadow-2xl'
+          : 'w-full h-32 hover:scale-105 hover:ring-4 hover:ring-purple-500/50 shadow-lg'
+      }`}
+      whileHover={!isMainView ? { scale: 1.05 } : undefined}
+      whileTap={!isMainView ? { scale: 0.98 } : undefined}
+    >
+      {stream ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+          <div className="w-16 h-16 rounded-full bg-gray-700/50 flex items-center justify-center mb-2">
+            <span className="text-3xl">👤</span>
+          </div>
+          <span className="text-gray-400 text-sm">Connecting...</span>
+        </div>
+      )}
+
+      {/* Name Tag */}
+      <div className={`absolute bottom-3 left-3 px-3 py-1.5 rounded-lg backdrop-blur-md ${
+        isHost
+          ? 'bg-yellow-500/90 text-black'
+          : 'bg-black/60 text-white'
+      }`}>
+        <span className="text-sm font-semibold flex items-center gap-1">
+          {name} {isLocal && '(You)'}
+          {isHost && <Crown className="w-3 h-3" />}
+        </span>
+      </div>
+
+      {/* Connection Status */}
+      {!stream && (
+        <div className="absolute top-3 right-3">
+          <div className="w-3 h-3 bg-yellow-500 rounded-full animate-pulse" />
+        </div>
+      )}
+    </motion.div>
+  );
+});
+
+VideoTile.displayName = 'VideoTile';
+
+// =====================================================
+// MAIN VIDEO CHAT COMPONENT
+// =====================================================
+const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave }) => {
+  // =====================================================
+  // REFS - Stable references that don't cause re-renders
+  // =====================================================
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const myVideoRef = useRef<HTMLVideoElement>(null);
+  const hasJoinedRef = useRef(false);
+  const isConnectingRef = useRef(false);
+
+  // =====================================================
+  // STATE - Only what needs to trigger re-renders
+  // =====================================================
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<{ [userId: string]: MediaStream }>({});
-  const [participants, setParticipants] = useState<Map<string, ParticipantInfo>>(new Map());
-
-  const myVideo = useRef<HTMLVideoElement>(null);
-  const socketRef = useRef<any>(null);
-  const peersRef = useRef<{ [userId: string]: RTCPeerConnection }>({});
-  const myStreamRef = useRef<MediaStream | null>(null);
+  const [isJoined, setIsJoined] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('Initializing...');
 
   const isHost = user.role === 'host' || user.role === 'instructor';
+  const roomId = session?.roomId || session?._id;
 
-  // Get focused video (selected user or host if no selection)
-  const focusedUserId = selectedUserId || (isHost ? null : user._id);
+  // =====================================================
+  // GET USER MEDIA - ONLY ONCE
+  // =====================================================
+  useEffect(() => {
+    console.log('[INIT] Getting user media...');
+    let mounted = true;
 
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-          <p className="text-gray-300">Loading session...</p>
-        </div>
-      </div>
-    );
-  }
+    const initMedia = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
 
-  const fetchAnalytics = async () => {
-    try {
-      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      const res = await axios.get(`${getBackendUrl()}/api/sessions/${session._id}/analytics`, config);
-      setAnalytics(res.data);
-    } catch {
-      console.error('Failed to fetch analytics');
+        if (!mounted) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
+        console.log('[INIT] Got local stream');
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = stream;
+        }
+
+        setConnectionStatus('Camera ready');
+      } catch (err: any) {
+        console.error('[INIT] getUserMedia error:', err);
+        toast.error(`Camera access failed: ${err.message}`);
+        setConnectionStatus('Camera failed');
+      }
+    };
+
+    initMedia();
+
+    // Cleanup function - ONLY runs on unmount
+    return () => {
+      console.log('[CLEANUP] Stopping all tracks');
+      mounted = false;
+      localStreamRef.current?.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    };
+  }, []); // EMPTY DEPENDENCY ARRAY = run once only
+
+  // =====================================================
+  // SOCKET CONNECTION - ONLY ONCE
+  // =====================================================
+  useEffect(() => {
+    if (socketRef.current) return; // Prevent double initialization
+
+    console.log('[SOCKET] Initializing connection...');
+    const socket = io(getSocketUrl(), {
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      auth: { token: localStorage.getItem('token') }
+    });
+
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('[SOCKET] Connected:', socket.id);
+      setConnectionStatus('Connected to server');
+
+      // Auto-join room if we have the session
+      if (roomId && !hasJoinedRef.current && !isConnectingRef.current) {
+        joinRoom();
+      }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('[SOCKET] Disconnected:', reason);
+      setConnectionStatus('Disconnected');
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('[SOCKET] Connection error:', error);
+      setConnectionStatus('Connection error');
+    });
+
+    // Room events
+    socket.on('room-joined', handleRoomJoined);
+    socket.on('user-joined', handleUserJoined);
+    socket.on('user-left', handleUserLeft);
+
+    // WebRTC signaling
+    socket.on('offer', handleOffer);
+    socket.on('answer', handleAnswer);
+    socket.on('ice-candidate', handleIceCandidate);
+
+    return () => {
+      console.log('[CLEANUP] Disconnecting socket');
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, []); // EMPTY DEPENDENCY ARRAY = run once only
+
+  // =====================================================
+  // WEBRTC PEER CONNECTION MANAGEMENT
+  // =====================================================
+  const createPeerConnection = useCallback((targetUserId: string, targetSocketId: string): RTCPeerConnection => {
+    // CRITICAL: Check if peer already exists - prevent duplicates
+    if (peersRef.current.has(targetUserId)) {
+      console.log(`[WEBRTC] Peer for ${targetUserId} already exists, reusing`);
+      return peersRef.current.get(targetUserId)!;
     }
-  };
 
-  const formatRemainingTime = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    return `${minutes}:${remainder.toString().padStart(2, '0')}`;
-  };
+    console.log(`[WEBRTC] Creating new peer connection for ${targetUserId}`);
 
-  const handleSessionEnded = async () => {
-    setSessionEnded(true);
-    setStatusMessage('The session has ended. Fetching final attendance...');
-    await fetchFinalAttendance();
-    leaveRoom();
-    toast.success('Session has ended');
-  };
-
-  // ================= WEBRTC PEER CONNECTION =================
-  const createPeerConnection = (targetUserId: string): RTCPeerConnection => {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -121,18 +263,33 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       ]
     });
 
-    // Add local stream tracks to peer connection
-    if (myStreamRef.current) {
-      myStreamRef.current.getTracks().forEach(track => {
-        if (myStreamRef.current) {
-          pc.addTrack(track, myStreamRef.current);
+    // Add local stream tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        if (localStreamRef.current) {
+          pc.addTrack(track, localStreamRef.current);
         }
       });
     }
 
+    // Handle remote stream
+    pc.ontrack = (event) => {
+      console.log(`[WEBRTC] Received remote stream from ${targetUserId}`);
+      const [remoteStream] = event.streams;
+
+      setParticipants(prev => {
+        const updated = new Map(prev);
+        const participant = updated.get(targetUserId);
+        if (participant) {
+          updated.set(targetUserId, { ...participant, stream: remoteStream });
+        }
+        return updated;
+      });
+    };
+
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate && socketRef.current) {
         socketRef.current.emit('ice-candidate', {
           targetUserId,
           candidate: event.candidate,
@@ -141,1014 +298,441 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       }
     };
 
-    // Handle remote stream
-    pc.ontrack = (event) => {
-      console.log(`Received remote stream from ${targetUserId}`);
-      const [remoteStream] = event.streams;
-      setRemoteStreams(prev => ({
-        ...prev,
-        [targetUserId]: remoteStream
-      }));
-    };
-
+    // Connection state logging
     pc.onconnectionstatechange = () => {
-      console.log(`Connection state with ${targetUserId}:`, pc.connectionState);
+      console.log(`[WEBRTC] Connection state with ${targetUserId}: ${pc.connectionState}`);
     };
 
+    peersRef.current.set(targetUserId, pc);
     return pc;
-  };
+  }, [user._id]);
 
-  const initiateCall = async (targetUserId: string) => {
-    try {
-      const pc = createPeerConnection(targetUserId);
-      peersRef.current[targetUserId] = pc;
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      socketRef.current.emit('offer', {
-        targetUserId,
-        offer,
-        userId: user._id
-      });
-    } catch (error) {
-      console.error('Error initiating call:', error);
-    }
-  };
-
-  const handleOffer = async (from: string, offer: RTCSessionDescriptionInit) => {
-    try {
-      const pc = createPeerConnection(from);
-      peersRef.current[from] = pc;
-
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      socketRef.current.emit('answer', {
-        targetUserId: from,
-        answer,
-        userId: user._id
-      });
-    } catch (error) {
-      console.error('Error handling offer:', error);
-    }
-  };
-
-  const handleAnswer = async (from: string, answer: RTCSessionDescriptionInit) => {
-    try {
-      const pc = peersRef.current[from];
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      }
-    } catch (error) {
-      console.error('Error handling answer:', error);
-    }
-  };
-
-  const handleIceCandidate = async (from: string, candidate: RTCIceCandidateInit) => {
-    try {
-      const pc = peersRef.current[from];
-      if (pc) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-    } catch (error) {
-      console.error('Error handling ICE candidate:', error);
-    }
-  };
-
-  const removePeer = (userId: string) => {
-    const pc = peersRef.current[userId];
+  const removePeer = useCallback((userId: string) => {
+    const pc = peersRef.current.get(userId);
     if (pc) {
       pc.close();
-      delete peersRef.current[userId];
+      peersRef.current.delete(userId);
+      console.log(`[WEBRTC] Closed peer connection for ${userId}`);
     }
-    setRemoteStreams(prev => {
-      const updated = { ...prev };
-      delete updated[userId];
-      return updated;
-    });
+
     setParticipants(prev => {
       const updated = new Map(prev);
       updated.delete(userId);
       return updated;
     });
-  };
-
-  // ================= SOCKET.IO =================
-  useEffect(() => {
-    const socketUrl = getSocketUrl();
-    socketRef.current = io(socketUrl, {
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
-      auth: { token: localStorage.getItem('token') }
-    });
-
-    socketRef.current.on('connect_error', (error: any) => {
-      console.error('Socket connection error:', error);
-      setStatusMessage('Connection error - trying to reconnect...');
-    });
-
-    socketRef.current.on('disconnect', () => {
-      console.log('Socket disconnected');
-    });
-
-    socketRef.current.on('connect', () => {
-      console.log('Connected to socket server');
-      setStatusMessage('Connected to server');
-    });
-
-    return () => {
-      socketRef.current?.disconnect();
-    };
   }, []);
 
-  // Setup socket event listeners
-  useEffect(() => {
-    if (!socketRef.current) return;
+  // =====================================================
+  // WEBRTC SIGNALING HANDLERS
+  // =====================================================
+  const initiateCall = useCallback(async (targetUserId: string, targetSocketId: string) => {
+    try {
+      const pc = createPeerConnection(targetUserId, targetSocketId);
 
-    // Room joined
-    socketRef.current.on('room-joined', (data: any) => {
-      console.log('Room joined:', data);
-      setStatusMessage('Joined room successfully');
-
-      // Initiate calls to existing participants
-      if (data.participants) {
-        data.participants.forEach((participant: any) => {
-          initiateCall(participant.userId);
-        });
-      }
-    });
-
-    // User joined
-    socketRef.current.on('user-joined', (data: any) => {
-      console.log('User joined:', data);
-      const { userId, userInfo, socketId } = data;
-
-      setParticipants(prev => {
-        const updated = new Map(prev);
-        updated.set(userId, {
-          userId,
-          socketId,
-          userInfo: userInfo || { userId, role: 'student' }
-        });
-        return updated;
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
       });
 
-      setParticipantsCount(prev => prev + 1);
-      toast.success(`${userInfo?.name || 'Someone'} joined the room`);
+      await pc.setLocalDescription(offer);
 
-      // Initiate call to new user
-      initiateCall(userId);
-    });
-
-    // User left
-    socketRef.current.on('user-left', (data: any) => {
-      console.log('User left:', data);
-      const { userId } = data;
-
-      removePeer(userId);
-      setParticipantsCount(prev => Math.max(1, prev - 1));
-      toast.success('Someone left the room');
-    });
-
-    // WebRTC signaling
-    socketRef.current.on('offer', (data: any) => {
-      handleOffer(data.from, data.offer);
-    });
-
-    socketRef.current.on('answer', (data: any) => {
-      handleAnswer(data.from, data.answer);
-    });
-
-    socketRef.current.on('ice-candidate', (data: any) => {
-      handleIceCandidate(data.from, data.candidate);
-    });
-
-    // Attendance events
-    socketRef.current.on('attendance_approved', (data: any) => {
-      if (data.studentId === user._id) {
-        setRequestStatus('approved');
-        setStatusMessage('✅ Your attendance was approved!');
-        toast.success(data.message);
-      }
-    });
-
-    socketRef.current.on('attendance_rejected', (data: any) => {
-      if (data.studentId === user._id) {
-        setRequestStatus('rejected');
-        setStatusMessage('❌ Your request was rejected');
-        toast.error(data.message);
-      }
-    });
-
-    socketRef.current.on('new_attendance_request', (data: any) => {
-      if (isHost) {
-        setPendingRequests(prev => [...prev, data.request]);
-        toast.success(`📋 New attendance request from ${data.request.studentName}`);
-      }
-    });
-
-    socketRef.current.on('pending_requests', (data: any) => {
-      setPendingRequests(data.requests);
-    });
-
-    socketRef.current.on('request_error', (data: any) => {
-      toast.error(data.error);
-    });
-
-    socketRef.current.on('request_sent', (data: any) => {
-      setRequestStatus('sent');
-      setStatusMessage(data.message);
-    });
-
-    socketRef.current.on('session-ended', (data: any) => {
-      if (data.roomId === roomId) {
-        handleSessionEnded();
-      }
-    });
-
-    socketRef.current.on('reaction', (reaction: any) => {
-      setReactions(prev => [...prev, reaction]);
-      setTimeout(() => {
-        setReactions(prev => prev.filter(item => item.id !== reaction.id));
-      }, 3200);
-    });
-
-    return () => {
-      socketRef.current.off();
-    };
-  }, [user._id, isHost, roomId]);
-
-  // Get user media
-  useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({ video: camOn, audio: micOn })
-      .then((media) => {
-        setStream(media);
-        myStreamRef.current = media;
-        if (myVideo.current) myVideo.current.srcObject = media;
-      })
-      .catch((err) => {
-        console.error('Error accessing media devices:', err);
-        toast.error('Camera/microphone access denied or unavailable.');
+      socketRef.current?.emit('offer', {
+        targetUserId,
+        offer,
+        userId: user._id
       });
 
-    return () => {
-      myStreamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, [camOn, micOn]);
+      console.log(`[WEBRTC] Sent offer to ${targetUserId}`);
+    } catch (error) {
+      console.error('[WEBRTC] Error initiating call:', error);
+    }
+  }, [createPeerConnection, user._id]);
 
-  // Join room
-  const joinRoomById = async (targetRoomId: string) => {
-    if (!targetRoomId) return;
+  const handleOffer = useCallback(async (data: any) => {
+    const { from, fromSocketId, offer } = data;
 
     try {
-      socketRef.current.emit('join-room', {
-        roomId: targetRoomId,
-        userId: user._id,
-        userInfo: {
-          userId: user._id,
-          name: user.name,
-          role: user.role
-        }
+      const pc = createPeerConnection(from, fromSocketId);
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socketRef.current?.emit('answer', {
+        targetUserId: from,
+        answer,
+        userId: user._id
       });
 
-      if (isHost) {
-        socketRef.current.emit('join_session_as_host', session._id);
+      console.log(`[WEBRTC] Sent answer to ${from}`);
+    } catch (error) {
+      console.error('[WEBRTC] Error handling offer:', error);
+    }
+  }, [createPeerConnection, user._id]);
+
+  const handleAnswer = useCallback(async (data: any) => {
+    const { from, answer } = data;
+
+    try {
+      const pc = peersRef.current.get(from);
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log(`[WEBRTC] Set remote description for ${from}`);
       }
-
-      setJoined(true);
-      setRoomId(targetRoomId);
-      setParticipantsCount(1);
-      fetchRequestStatus();
-      toast.success('Joined the meeting');
-    } catch (error: any) {
-      console.error('Failed to join session:', error);
-      toast.error(error.response?.data?.error || 'Failed to join session');
+    } catch (error) {
+      console.error('[WEBRTC] Error handling answer:', error);
     }
-  };
+  }, []);
 
-  const joinRoom = () => {
-    if (roomId) {
-      joinRoomById(roomId);
+  const handleIceCandidate = useCallback(async (data: any) => {
+    const { from, candidate } = data;
+
+    try {
+      const pc = peersRef.current.get(from);
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (error) {
+      console.error('[WEBRTC] Error handling ICE candidate:', error);
     }
-  };
+  }, []);
 
-  const leaveRoom = () => {
-    socketRef.current.emit('leave-room', {
-      roomId,
-      userId: user._id
+  // =====================================================
+  // ROOM EVENT HANDLERS
+  // =====================================================
+  const handleRoomJoined = useCallback((data: any) => {
+    console.log('[ROOM] Joined:', data);
+    hasJoinedRef.current = true;
+    isConnectingRef.current = false;
+    setIsJoined(true);
+    setConnectionStatus('In meeting');
+
+    // Initiate calls to existing participants
+    if (data.participants) {
+      data.participants.forEach((participant: any) => {
+        // Add to participants map first
+        setParticipants(prev => {
+          const updated = new Map(prev);
+          updated.set(participant.userId, {
+            userId: participant.userId,
+            socketId: participant.socketId,
+            userInfo: participant.userInfo,
+            stream: undefined
+          });
+          return updated;
+        });
+
+        // Then initiate call
+        setTimeout(() => {
+          initiateCall(participant.userId, participant.socketId);
+        }, 500);
+      });
+    }
+
+    toast.success('Joined meeting successfully');
+  }, [initiateCall]);
+
+  const handleUserJoined = useCallback((data: any) => {
+    console.log('[ROOM] User joined:', data);
+    const { userId, socketId, userInfo } = data;
+
+    // Add new participant
+    setParticipants(prev => {
+      const updated = new Map(prev);
+      updated.set(userId, {
+        userId,
+        socketId,
+        userInfo,
+        stream: undefined
+      });
+      return updated;
     });
-    setJoined(false);
-    setRoomId('');
+
+    toast.success(`${userInfo?.name || 'Someone'} joined`);
+
+    // Initiate call to new user
+    setTimeout(() => {
+      initiateCall(userId, socketId);
+    }, 500);
+  }, [initiateCall]);
+
+  const handleUserLeft = useCallback((data: any) => {
+    console.log('[ROOM] User left:', data);
+    const { userId } = data;
+
+    removePeer(userId);
+    toast.success('Someone left the meeting');
+
+    // If focused user left, clear selection
+    setSelectedUserId(prev => prev === userId ? null : prev);
+  }, [removePeer]);
+
+  // =====================================================
+  // JOIN ROOM FUNCTION
+  // =====================================================
+  const joinRoom = useCallback(() => {
+    if (!socketRef.current || !roomId || hasJoinedRef.current || isConnectingRef.current) {
+      return;
+    }
+
+    console.log(`[ROOM] Joining room: ${roomId}`);
+    isConnectingRef.current = true;
+    setConnectionStatus('Joining room...');
+
+    socketRef.current.emit('join-room', {
+      roomId,
+      userId: user._id,
+      userInfo: {
+        name: user.name,
+        role: user.role
+      }
+    });
+  }, [roomId, user._id, user.name, user.role]);
+
+  // =====================================================
+  // LEAVE ROOM FUNCTION
+  // =====================================================
+  const leaveRoom = useCallback(() => {
+    console.log('[ROOM] Leaving room');
 
     // Close all peer connections
-    Object.values(peersRef.current).forEach(pc => pc.close());
-    peersRef.current = {};
-    setRemoteStreams({});
+    peersRef.current.forEach((pc, userId) => {
+      pc.close();
+      console.log(`[WEBRTC] Closed connection with ${userId}`);
+    });
+    peersRef.current.clear();
+
+    // Notify server
+    if (socketRef.current && roomId) {
+      socketRef.current.emit('leave-room', {
+        roomId,
+        userId: user._id
+      });
+    }
+
+    // Clear participants
     setParticipants(new Map());
+    hasJoinedRef.current = false;
+    isConnectingRef.current = false;
+    setIsJoined(false);
 
-    myStreamRef.current?.getTracks().forEach((t) => t.stop());
-    setStream(null);
-  };
+    onLeave();
+  }, [roomId, user._id, onLeave]);
 
-  const endSession = async () => {
-    try {
-      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      await axios.post(`${getBackendUrl()}/api/sessions/${session._id}/end`, {}, config);
-      await fetchFinalAttendance();
-      toast.success('Session ended successfully');
-      leaveRoom();
-    } catch {
-      toast.error('Failed to end session');
-    }
-  };
-
-  const fetchFinalAttendance = async () => {
-    try {
-      const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
-      const res = await axios.get(`${getBackendUrl()}/api/attendance/${session._id}`, config);
-      const userAttendance = res.data.attendances.find((att: any) => att.studentId === user._id);
-      if (userAttendance) {
-        setFinalAttendance({
-          presentTime: userAttendance.presentTime,
-          status: userAttendance.status
-        });
+  // =====================================================
+  // MEDIA CONTROLS
+  // =====================================================
+  const toggleMute = useCallback(() => {
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+        toast.success(audioTrack.enabled ? 'Microphone on' : 'Microphone off');
       }
-    } catch (error) {
-      console.error('Failed to fetch final attendance:', error);
     }
-  };
+  }, []);
 
-  const fetchRequestStatus = async () => {
-    try {
-      const res = await axios.get(`${getBackendUrl()}/api/attendance/requests/${session._id}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
-      const myRequest = res.data.requests.find((r: any) => r.studentId === user._id);
-      if (myRequest) {
-        setRequestStatus(myRequest.status);
+  const toggleVideo = useCallback(() => {
+    if (localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
+        toast.success(videoTrack.enabled ? 'Camera on' : 'Camera off');
       }
-    } catch (error) {
-      console.error('Fetch request status error:', error);
     }
-  };
+  }, []);
 
-  // Face detection for attendance
-  const captureAndSendFrame = async () => {
-    if (!myVideo.current || !user._id) return;
-    if (myVideo.current.videoWidth === 0) return;
-
-    setTotalTime(prev => prev + 10);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = myVideo.current.videoWidth;
-    canvas.height = myVideo.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx?.drawImage(myVideo.current, 0, 0);
-
-    canvas.toBlob(async (blob) => {
-      if (!blob) return;
-
-      const formData = new FormData();
-      formData.append('image', blob, 'frame.jpg');
-
-      try {
-        setFaceDetectionState('processing');
-        const aiUrl = getAIServiceUrl();
-
-        if (!aiUrl || aiUrl.includes('undefined')) {
-          setFaceDetectionState('not-detected');
-          setStatusMessage('⚠️ AI service not configured');
-          return;
-        }
-
-        const { data } = await axios.post(`${aiUrl}/api/recognize`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          timeout: 8000
-        });
-
-        if (data.success && data.recognized_users && data.recognized_users.length > 0) {
-          setFaceCount(data.recognized_users.length);
-          setFaceDetectionState('detected');
-
-          if (data.recognized_users.includes(user._id)) {
-            setPresentTime(prev => prev + 10);
-            await axios.post(
-              `${getBackendUrl()}/api/attendance/update`,
-              { studentId: user._id, sessionId: session._id, timeIncrement: 10 },
-              { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
-            );
-            setStatusMessage('✅ Face detected - Tracking attendance');
-          } else {
-            setStatusMessage('❌ Face not recognized - Ensure good lighting');
-          }
-        } else {
-          setFaceCount(0);
-          setFaceDetectionState('not-detected');
-          setStatusMessage('❌ No face detected - Please face the camera');
-        }
-      } catch (error: any) {
-        setFaceDetectionState('not-detected');
-        if (error.code === 'ECONNABORTED') {
-          setStatusMessage('⚠️ Face recognition timed out');
-        } else {
-          setStatusMessage('⚠️ Face recognition service unavailable');
-        }
-      }
-    }, 'image/jpeg', 0.8);
-  };
-
-  // Attendance request handlers
-  const emitReaction = (emoji: string) => {
-    if (!joined || !roomId) return;
-    socketRef.current.emit('reaction', {
-      roomId,
-      emoji,
-      sender: user.name
-    });
-  };
-
-  const requestAttendance = async () => {
-    if (requesting) return;
-    setRequesting(true);
-    try {
-      socketRef.current.emit('send_attendance_request', {
-        studentId: user._id,
-        studentName: user.name || 'Unknown Student',
-        sessionId: session._id
-      });
-    } catch (error: any) {
-      setStatusMessage('Failed to send attendance request');
-      toast.error('Failed to send attendance request');
-    } finally {
-      setRequesting(false);
-    }
-  };
-
-  const approveAttendanceRequest = (requestId: string, studentId: string) => {
-    socketRef.current.emit('approve_attendance_request', {
-      requestId,
-      studentId,
-      sessionId: session._id
-    });
-  };
-
-  const rejectAttendanceRequest = (requestId: string, studentId: string) => {
-    socketRef.current.emit('reject_attendance_request', {
-      requestId,
-      studentId,
-      sessionId: session._id,
-      reason: 'Request was rejected by host'
-    });
-  };
-
-  // Effects
-  useEffect(() => {
-    if (session && session._id) {
-      fetchAnalytics();
-    }
-  }, [session]);
-
-  useEffect(() => {
-    if (!stream || !roomId || !joined || sessionEnded) return;
-    const id = setInterval(captureAndSendFrame, 10000);
-    return () => clearInterval(id);
-  }, [stream, roomId, joined, sessionEnded]);
-
-  useEffect(() => {
-    if (session && session.endTime) {
-      const endMs = new Date(session.endTime).getTime();
-      const updateRemaining = () => {
-        const remainingSeconds = Math.max(Math.ceil((endMs - Date.now()) / 1000), 0);
-        setSessionRemaining(remainingSeconds);
-        if (remainingSeconds === 0 && !sessionEnded) {
-          handleSessionEnded();
-        }
-      };
-      updateRemaining();
-      const timer = window.setInterval(updateRemaining, 1000);
-      return () => window.clearInterval(timer);
-    }
-  }, [session.endTime, sessionEnded]);
-
-  useEffect(() => {
-    if (session && session.roomId && !sessionEnded) {
-      setRoomId(session.roomId);
-      setTimeout(() => joinRoomById(session.roomId), 1000);
-    }
-  }, [session, sessionEnded]);
-
-  // ================= ZOOM-LIKE VIDEO LAYOUT =================
-  const VideoTile: React.FC<{
-    stream: MediaStream | null;
-    userId: string;
-    isHost: boolean;
-    name: string;
-    isMainView?: boolean;
-    onClick?: () => void;
-  }> = ({ stream, userId, isHost, name, isMainView, onClick }) => {
-    const videoRef = useRef<HTMLVideoElement>(null);
-
-    useEffect(() => {
-      if (videoRef.current && stream) {
-        videoRef.current.srcObject = stream;
-      }
-    }, [stream]);
-
-    return (
-      <motion.div
-        whileHover={!isMainView ? { scale: 1.02 } : undefined}
-        onClick={onClick}
-        className={`relative overflow-hidden rounded-xl bg-gray-900 ${
-          isMainView
-            ? 'w-full h-full'
-            : 'w-full h-24 cursor-pointer hover:ring-2 hover:ring-purple-500'
-        }`}
-      >
-        {stream ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted={userId === user._id}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gray-800">
-            <div className="text-center">
-              <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-gray-700 flex items-center justify-center">
-                <span className="text-xl">👤</span>
-              </div>
-              <span className="text-xs text-gray-400">No video</span>
-            </div>
-          </div>
-        )}
-
-        {/* Name tag */}
-        <div className={`absolute bottom-2 left-2 px-2 py-1 rounded-lg ${
-          isHost ? 'bg-yellow-500/80' : 'bg-black/60'
-        } backdrop-blur-sm`}>
-          <span className={`text-xs font-medium ${isHost ? 'text-black' : 'text-white'}`}>
-            {name} {userId === user._id && '(You)'}
-            {isHost && ' 👑'}
-          </span>
-        </div>
-
-        {/* Mute indicator */}
-        {!micOn && userId === user._id && (
-          <div className="absolute top-2 right-2 w-8 h-8 bg-red-500/80 rounded-full flex items-center justify-center">
-            <MicOff className="w-4 h-4 text-white" />
-          </div>
-        )}
-      </motion.div>
-    );
-  };
-
-  // Get all participants for the video grid
-  const getAllParticipants = () => {
-    const all: Array<{ userId: string; stream: MediaStream | null; isHost: boolean; name: string }> = [];
+  // =====================================================
+  // DERIVED STATE FOR UI
+  // =====================================================
+  const allParticipants = React.useMemo(() => {
+    const list: Array<{
+      userId: string;
+      socketId: string;
+      stream?: MediaStream | null;
+      isLocal: boolean;
+      isHost: boolean;
+      name: string;
+    }> = [];
 
     // Add self
-    all.push({
+    list.push({
       userId: user._id,
-      stream: stream,
+      socketId: 'local',
+      stream: localStream,
+      isLocal: true,
       isHost,
       name: user.name || 'You'
     });
 
     // Add remote participants
-    participants.forEach((participant, userId) => {
+    participants.forEach((p, userId) => {
       if (userId !== user._id) {
-        all.push({
+        list.push({
           userId,
-          stream: remoteStreams[userId] || null,
-          isHost: participant.userInfo?.role === 'host' || participant.userInfo?.role === 'instructor',
-          name: participant.userInfo?.name || 'Participant'
+          socketId: p.socketId,
+          stream: p.stream,
+          isLocal: false,
+          isHost: p.userInfo?.role === 'host' || p.userInfo?.role === 'instructor',
+          name: p.userInfo?.name || 'Participant'
         });
       }
     });
 
-    return all;
-  };
+    return list;
+  }, [participants, localStream, user._id, user.name, isHost]);
 
-  const allParticipants = getAllParticipants();
+  // Determine main and grid videos (Zoom-like layout)
+  const mainParticipant = React.useMemo(() => {
+    if (selectedUserId) {
+      return allParticipants.find(p => p.userId === selectedUserId) || allParticipants[0];
+    }
+    // Default: show first non-local participant or self if alone
+    const remote = allParticipants.find(p => !p.isLocal);
+    return remote || allParticipants[0];
+  }, [allParticipants, selectedUserId]);
 
-  // Separate main video and grid videos based on selection
-  const mainParticipant = allParticipants.find(p => p.userId === focusedUserId) || allParticipants[0];
-  const gridParticipants = allParticipants.filter(p => p.userId !== mainParticipant?.userId);
+  const gridParticipants = React.useMemo(() => {
+    return allParticipants.filter(p => p.userId !== mainParticipant?.userId);
+  }, [allParticipants, mainParticipant]);
+
+  // =====================================================
+  // RENDER
+  // =====================================================
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4" />
+          <p className="text-white">Loading session...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 dark:from-slate-900 dark:via-purple-900 dark:to-slate-900">
-      <AnimatePresence mode="wait">
-        {!joined ? (
-          <motion.div
-            key="join-screen"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.5 }}
-            className="min-h-screen flex items-center justify-center p-4"
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2, duration: 0.5 }}
-              className="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 rounded-3xl p-8 shadow-2xl max-w-md w-full"
+    <div className="min-h-screen bg-gray-950 flex flex-col">
+      {/* Header */}
+      <header className="bg-gray-900 border-b border-gray-800 px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-white">{session.title}</h1>
+            <p className="text-gray-400 text-sm">
+              Room: {roomId} | {allParticipants.length} participants | {connectionStatus}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 rounded-lg">
+              <Users className="w-4 h-4 text-gray-400" />
+              <span className="text-gray-300 text-sm">{allParticipants.length}</span>
+            </div>
+            <button
+              onClick={onLogout}
+              className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
             >
-              <div className="text-center mb-8">
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ delay: 0.4, type: "spring", stiffness: 200 }}
-                  className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-2xl mb-4"
-                >
-                  <Camera className="w-8 h-8 text-white" />
-                </motion.div>
-                <h2 className="text-2xl font-bold text-white mb-2">Connect Together</h2>
-                <p className="text-gray-300">
-                  {sessionEnded || !session.isActive
-                    ? 'This session has already ended.'
-                    : 'Enter room ID to join your live session.'}
-                </p>
-              </div>
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
 
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.6, duration: 0.4 }}
-                className="space-y-4"
-              >
-                <input
-                  type="text"
-                  placeholder="Enter Room ID"
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  disabled={sessionEnded || !session.isActive}
-                  className="w-full px-4 py-3 bg-white/20 dark:bg-white/15 border border-white/40 rounded-xl text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed caret-white backdrop-blur-sm"
-                />
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={joinRoom}
-                  disabled={sessionEnded || !session.isActive}
-                  className="w-full py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-semibold rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:shadow-blue-500/50"
-                >
-                  Join Meeting
-                </motion.button>
-              </motion.div>
-            </motion.div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="meeting-room"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.5 }}
-            className="min-h-screen flex flex-col"
-          >
-            {/* Attendance Progress Bar */}
-            <AttendanceProgressBar
-              presentTime={presentTime}
-              totalTime={totalTime}
-              participantsPresent={Math.max(0, participantsCount - 1)}
-              totalParticipants={participantsCount}
-              sessionStatus={sessionEnded ? 'ended' : 'active'}
-            />
-
-            {/* Pending Requests Panel - For Hosts */}
-            {isHost && (
-              <PendingRequests
-                requests={pendingRequests}
-                onApprove={approveAttendanceRequest}
-                onReject={rejectAttendanceRequest}
+      {/* Main Video Area */}
+      <main className="flex-1 flex flex-col lg:flex-row gap-4 p-4 overflow-hidden">
+        {/* Large Main Video */}
+        <div className="flex-1 min-h-0">
+          <div className="h-full rounded-2xl overflow-hidden bg-gray-900">
+            {mainParticipant && (
+              <VideoTile
+                key={mainParticipant.userId}
+                stream={mainParticipant.stream || null}
+                userId={mainParticipant.userId}
+                isLocal={mainParticipant.isLocal}
+                isHost={mainParticipant.isHost}
+                name={mainParticipant.name}
+                isMainView={true}
               />
             )}
+          </div>
+        </div>
 
-            {/* MAIN VIDEO LAYOUT - Zoom Style */}
-            <div className="flex-1 p-4 flex gap-4 overflow-hidden">
-              {/* Main Video Area */}
-              <div className="flex-1 flex flex-col">
-                {/* Main Large Video */}
-                <div className="flex-1 rounded-2xl overflow-hidden bg-gray-900 relative">
-                  {mainParticipant && (
-                    <VideoTile
-                      stream={mainParticipant.stream}
-                      userId={mainParticipant.userId}
-                      isHost={mainParticipant.isHost}
-                      name={mainParticipant.name}
-                      isMainView={true}
-                    />
-                  )}
-                </div>
-
-                {/* Small Grid at Bottom */}
-                {gridParticipants.length > 0 && (
-                  <div className="mt-4 flex gap-2 overflow-x-auto pb-2">
-                    {gridParticipants.map((participant) => (
-                      <div key={participant.userId} className="w-40 h-24 flex-shrink-0">
-                        <VideoTile
-                          stream={participant.stream}
-                          userId={participant.userId}
-                          isHost={participant.isHost}
-                          name={participant.name}
-                          onClick={() => setSelectedUserId(participant.userId)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+        {/* Side Grid - Small Videos */}
+        <div className="lg:w-64 flex lg:flex-col gap-3 overflow-x-auto lg:overflow-y-auto lg:overflow-x-hidden">
+          {gridParticipants.map((participant) => (
+            <div key={participant.userId} className="flex-shrink-0 w-40 lg:w-full">
+              <VideoTile
+                stream={participant.stream || null}
+                userId={participant.userId}
+                isLocal={participant.isLocal}
+                isHost={participant.isHost}
+                name={participant.name}
+                onClick={() => setSelectedUserId(participant.userId)}
+              />
             </div>
+          ))}
+        </div>
+      </main>
 
-            {/* Face Detection Overlay */}
-            <FaceDetectionOverlay
-              isDetected={faceDetectionState === 'detected'}
-              isProcessing={faceDetectionState === 'processing'}
-              faceCount={faceCount}
-            />
-
-            {/* Status Messages */}
-            <AnimatePresence>
-              {statusMessage && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50"
-                >
-                  <div className="backdrop-blur-xl bg-white/20 dark:bg-white/10 border border-white/30 rounded-xl px-6 py-3 shadow-2xl">
-                    <p className="text-white font-medium">{statusMessage}</p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Session Ended Message */}
-            {sessionEnded && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="fixed inset-0 flex items-center justify-center z-50 bg-black/50 backdrop-blur-sm"
-              >
-                <div className="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 text-center">
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ delay: 0.2, type: "spring" }}
-                    className="w-16 h-16 bg-gradient-to-r from-red-500 to-pink-600 rounded-full flex items-center justify-center mx-auto mb-4"
-                  >
-                    <X className="w-8 h-8 text-white" />
-                  </motion.div>
-                  <h3 className="text-xl font-bold text-white mb-2">Session Ended</h3>
-                  <p className="text-gray-300 mb-4">Attendance has been finalized.</p>
-                  {finalAttendance && (
-                    <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
-                      <h4 className="text-white font-semibold mb-2">Final Attendance</h4>
-                      <p className="text-gray-300">Present Time: {Math.floor(finalAttendance.presentTime / 60)}m {finalAttendance.presentTime % 60}s</p>
-                      <p className="text-white font-medium">Status: {finalAttendance.status}</p>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
+      {/* Controls Bar */}
+      <footer className="bg-gray-900 border-t border-gray-800 px-6 py-4">
+        <div className="flex items-center justify-center gap-4">
+          {/* Mute Button */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={toggleMute}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+              isMuted
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-gray-700 hover:bg-gray-600'
+            }`}
+          >
+            {isMuted ? (
+              <MicOff className="w-6 h-6 text-white" />
+            ) : (
+              <Mic className="w-6 h-6 text-white" />
             )}
+          </motion.button>
 
-            {/* Attendance Request */}
-            {joined && finalAttendance?.status !== 'Present' && !sessionEnded && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="fixed bottom-24 left-4 right-4 z-40 max-w-md"
-              >
-                <div className="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 rounded-2xl p-6 shadow-2xl">
-                  <h3 className="text-white font-semibold mb-4">Manual Attendance Request</h3>
-                  {requestStatus === 'idle' && (
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={requestAttendance}
-                      disabled={requesting}
-                      className="w-full py-3 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 shadow-lg"
-                    >
-                      {requesting ? 'Sending...' : 'Request Attendance'}
-                    </motion.button>
-                  )}
-                  {requestStatus === 'sent' && <p className="text-yellow-300">⏳ Request Sent - Waiting for approval</p>}
-                  {requestStatus === 'approved' && <p className="text-green-300">✅ Request Approved - Attendance Marked</p>}
-                  {requestStatus === 'rejected' && <p className="text-red-300">❌ Request Rejected</p>}
-                </div>
-              </motion.div>
+          {/* Video Button */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={toggleVideo}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+              isVideoOff
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-gray-700 hover:bg-gray-600'
+            }`}
+          >
+            {isVideoOff ? (
+              <CameraOff className="w-6 h-6 text-white" />
+            ) : (
+              <Camera className="w-6 h-6 text-white" />
             )}
+          </motion.button>
 
-            {/* Floating Reactions */}
-            <div className="fixed inset-0 pointer-events-none z-30">
-              <AnimatePresence>
-                {reactions.map((reaction) => (
-                  <motion.div
-                    key={reaction.id}
-                    initial={{ opacity: 0, scale: 0, y: 100 }}
-                    animate={{
-                      opacity: [0, 1, 1, 0],
-                      scale: [0, 1, 1, 0],
-                      y: [100, 0, -100, -200]
-                    }}
-                    exit={{ opacity: 0, scale: 0 }}
-                    transition={{ duration: 3.2, ease: "easeOut" }}
-                    className="absolute text-4xl"
-                    style={{
-                      left: `${Math.random() * 80 + 10}%`,
-                      top: `${Math.random() * 60 + 20}%`
-                    }}
-                  >
-                    {reaction.emoji}
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+          {/* Leave Button */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={leaveRoom}
+            className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+          >
+            <PhoneOff className="w-6 h-6 text-white" />
+          </motion.button>
+        </div>
+      </footer>
 
-            {/* Controls Bar */}
-            <motion.div
-              initial={{ y: 100, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.8, duration: 0.5 }}
-              className="fixed bottom-0 left-0 right-0 backdrop-blur-xl bg-white/10 dark:bg-white/5 border-t border-white/20 p-4"
-            >
-              <div className="flex items-center justify-center space-x-4 max-w-4xl mx-auto">
-                {/* Emoji Reactions */}
-                <div className="flex space-x-2">
-                  {['✋', '❤️', '👏'].map((emoji) => (
-                    <motion.button
-                      key={emoji}
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
-                      onClick={() => emitReaction(emoji)}
-                      className="w-12 h-12 backdrop-blur-md bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl flex items-center justify-center text-xl transition-all duration-200 shadow-lg"
-                    >
-                      {emoji}
-                    </motion.button>
-                  ))}
-                </div>
-
-                <div className="w-px h-8 bg-white/30" />
-
-                {/* Media Controls */}
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setMicOn(!micOn)}
-                  className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl transition-all duration-200 shadow-lg ${
-                    micOn
-                      ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white'
-                      : 'backdrop-blur-md bg-red-500/20 border border-red-500/50 text-red-300'
-                  }`}
-                >
-                  {micOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-                </motion.button>
-
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setCamOn(!camOn)}
-                  className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl transition-all duration-200 shadow-lg ${
-                    camOn
-                      ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white'
-                      : 'backdrop-blur-md bg-red-500/20 border border-red-500/50 text-red-300'
-                  }`}
-                >
-                  {camOn ? <Camera className="w-6 h-6" /> : <CameraOff className="w-6 h-6" />}
-                </motion.button>
-
-                <div className="w-px h-8 bg-white/30" />
-
-                {/* Host Controls */}
-                {isHost && (
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => setShowPanel(!showPanel)}
-                    className="backdrop-blur-md bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl px-4 py-2 flex items-center space-x-2 text-white font-medium transition-all duration-200 shadow-lg"
-                  >
-                    <BarChart3 className="w-5 h-5" />
-                    <span>Panel</span>
-                  </motion.button>
-                )}
-
-                {/* Leave Button */}
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={leaveRoom}
-                  className="backdrop-blur-md bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-xl px-4 py-2 flex items-center space-x-2 text-red-300 font-medium transition-all duration-200 shadow-lg"
-                >
-                  <LogOut className="w-5 h-5" />
-                  <span>Leave</span>
-                </motion.button>
-
-                {/* Logout Button */}
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={onLogout}
-                  className="backdrop-blur-md bg-gray-500/20 hover:bg-gray-500/30 border border-gray-500/50 rounded-xl px-4 py-2 flex items-center space-x-2 text-gray-300 font-medium transition-all duration-200 shadow-lg"
-                >
-                  <UserX className="w-5 h-5" />
-                  <span>Logout</span>
-                </motion.button>
-              </div>
-            </motion.div>
-
-            {/* Side Panel */}
-            <AnimatePresence>
-              {showPanel && isHost && (
-                <motion.div
-                  initial={{ x: '100%' }}
-                  animate={{ x: 0 }}
-                  exit={{ x: '100%' }}
-                  transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                  className="fixed right-0 top-0 bottom-0 w-80 backdrop-blur-xl bg-white/10 dark:bg-white/5 border-l border-white/20 shadow-2xl z-50"
-                >
-                  <div className="p-6 h-full overflow-y-auto">
-                    <div className="flex items-center justify-between mb-6">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                          <BarChart3 className="w-6 h-6 text-white" />
-                        </div>
-                        <div>
-                          <h3 className="text-white font-bold">Dashboard</h3>
-                          <p className="text-gray-400 text-sm">Session Overview</p>
-                        </div>
-                      </div>
-                      <motion.button
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                        onClick={() => setShowPanel(false)}
-                        className="w-8 h-8 backdrop-blur-md bg-white/20 rounded-lg flex items-center justify-center text-white hover:bg-white/30 transition-all duration-200"
-                      >
-                        <X className="w-5 h-5" />
-                      </motion.button>
-                    </div>
-
-                    <div className="space-y-6">
-                      {/* Session Info */}
-                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
-                        <h4 className="text-white font-semibold mb-3 flex items-center">
-                          <Info className="w-5 h-5 mr-2" />
-                          Session Info
-                        </h4>
-                        <div className="space-y-2 text-sm">
-                          <p className="text-gray-300"><strong>Room:</strong> {roomId}</p>
-                          <p className="text-gray-300"><strong>Host:</strong> {user.name}</p>
-                          <p className="text-gray-300"><strong>Role:</strong> Host 👑</p>
-                          <p className="text-gray-300"><strong>Participants:</strong> {participantsCount}</p>
-                          {sessionRemaining !== null && (
-                            <p className="text-gray-300"><strong>Time Left:</strong> {formatRemainingTime(sessionRemaining)}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Analytics */}
-                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
-                        <h4 className="text-white font-semibold mb-3 flex items-center">
-                          <BarChart3 className="w-5 h-5 mr-2" />
-                          Analytics
-                        </h4>
-                        <div className="space-y-2 text-sm">
-                          <p className="text-gray-300"><strong>Total Participants:</strong> {analytics.totalParticipants}</p>
-                          <p className="text-gray-300"><strong>Avg Attendance:</strong> {analytics.avgAttendance}%</p>
-                          <p className="text-gray-300"><strong>Session Active:</strong> {analytics.activeNow ? 'Yes' : 'No'}</p>
-                        </div>
-                      </div>
-
-                      {/* Host Controls */}
-                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
-                        <h4 className="text-white font-semibold mb-3 flex items-center">
-                          <Settings className="w-5 h-5 mr-2" />
-                          Host Controls
-                        </h4>
-                        <div className="grid grid-cols-1 gap-2">
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={endSession}
-                            className="w-full py-2 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white font-medium rounded-lg transition-all duration-200 shadow-lg"
-                          >
-                            End Session
-                          </motion.button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Hidden local video for self-view if needed */}
+      <video
+        ref={myVideoRef}
+        autoPlay
+        playsInline
+        muted
+        className="hidden"
+      />
     </div>
   );
 };
