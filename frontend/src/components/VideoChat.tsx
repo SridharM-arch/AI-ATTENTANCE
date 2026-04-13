@@ -161,18 +161,21 @@ const res = await axios.get(
   `${getBackendUrl()}/api/sessions/public/join/${targetRoomId}`
 );
 
-// Step 2: Join session (PRIVATE with token)
-const config = { 
-  headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } 
-};
+// // Step 2: Join session (PRIVATE with token)
+// const config = { 
+//   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } 
+// };
 
-const response = await axios.post(
-  `${getBackendUrl()}/api/sessions/${res.data.sessionId}/join`,
-  {},
-  config
-);
-      console.log('Join session response:', response.data);
+// const response = await axios.post(
+//   `${getBackendUrl()}/api/sessions/${res.data.sessionId}/join`,
+//   {},
+//   config
+// );
+//       console.log('Join session response:', response.data);
 
+console.log("Joining demo room (no backend)");
+
+socketRef.current.emit("join-room", targetRoomId, user._id);
       socketRef.current.emit('join-room', targetRoomId, user._id);
       
       // If user is host or instructor, join the host room to receive requests
