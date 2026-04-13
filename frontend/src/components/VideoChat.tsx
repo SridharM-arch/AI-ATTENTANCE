@@ -157,9 +157,9 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
 
     try {
 // Step 1: Check session (PUBLIC)
-const res = await axios.get(
-  `${getBackendUrl()}/api/sessions/public/join/${targetRoomId}`
-);
+// const res = await axios.get(
+//   `${getBackendUrl()}/api/sessions/public/join/${targetRoomId}`
+// );
 
 // // Step 2: Join session (PRIVATE with token)
 // const config = { 
@@ -176,6 +176,8 @@ const res = await axios.get(
 console.log("Joining demo room (no backend)");
 
 socketRef.current.emit("join-room", targetRoomId, user._id);
+
+
       socketRef.current.emit('join-room', targetRoomId, user._id);
       
       // If user is host or instructor, join the host room to receive requests
