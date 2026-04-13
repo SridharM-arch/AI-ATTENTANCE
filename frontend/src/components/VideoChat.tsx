@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Camera, CameraOff, X, BarChart3, UserX, Info, CheckCircle, LogOut, Settings } from 'lucide-react';
+import { Mic, MicOff, Camera, CameraOff, X, BarChart3, UserX, Info, LogOut, Settings } from 'lucide-react';
 import axios from 'axios';
 import io from 'socket.io-client';
-import Peer from 'simple-peer';
 import toast from 'react-hot-toast';
 import { PendingRequests } from './PendingRequests';
-import { ParticipantsGrid } from './ParticipantsGrid';
 import { FaceDetectionOverlay } from './FaceDetectionOverlay';
 import { AttendanceProgressBar } from './AttendanceProgressBar';
 import { getSocketUrl, getAIServiceUrl, getBackendUrl } from '../config';
@@ -21,19 +19,27 @@ interface AttendanceRequest {
   status: string;
 }
 
+interface ParticipantInfo {
+  userId: string;
+  socketId: string;
+  userInfo: {
+    userId: string;
+    role: string;
+    name?: string;
+  };
+}
+
 const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }> = ({
   user,
   session,
   onLogout
 }) => {
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [peers, setPeers] = useState<{ [id: string]: Peer.Instance }>({});
   const [roomId, setRoomId] = useState('');
   const [joined, setJoined] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [showPanel, setShowPanel] = useState(false);
-  const [attendance, setAttendance] = useState<{ [userId: string]: boolean }>({});
   const [statusMessage, setStatusMessage] = useState<string>('Initializing...');
   const [finalAttendance, setFinalAttendance] = useState<{ presentTime: number; status: string } | null>(null);
   const [requestStatus, setRequestStatus] = useState<'idle' | 'sent' | 'approved' | 'rejected'>('idle');
@@ -43,36 +49,39 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
   const [sessionEnded, setSessionEnded] = useState(false);
   const [reactions, setReactions] = useState<Array<{ id: string; emoji: string; sender: string }>>([]);
   const [pendingRequests, setPendingRequests] = useState<AttendanceRequest[]>([]);
-  const [analytics, setAnalytics] = useState<{
-    totalParticipants: number;
-    activeParticipants: number;
-    avgAttendance: number;
-    sessionDuration: number | null;
-    activeNow: boolean;
-  }>({
+  const [analytics, setAnalytics] = useState({
     totalParticipants: 0,
     activeParticipants: 0,
     avgAttendance: 0,
-    sessionDuration: null,
+    sessionDuration: null as number | null,
     activeNow: false
   });
-  // Attendance metrics for progress bar
   const [presentTime, setPresentTime] = useState(0);
   const [totalTime, setTotalTime] = useState(0);
-  const participantsPresent = 0; // Static value - not updated dynamically
   const [faceDetectionState, setFaceDetectionState] = useState<'detected' | 'processing' | 'not-detected'>('not-detected');
   const [faceCount, setFaceCount] = useState(0);
 
+  // ZOOM-LIKE LAYOUT STATE
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<{ [userId: string]: MediaStream }>({});
+  const [participants, setParticipants] = useState<Map<string, ParticipantInfo>>(new Map());
+
   const myVideo = useRef<HTMLVideoElement>(null);
   const socketRef = useRef<any>(null);
-  const peersRef = useRef<{ [id: string]: any }>({});
+  const peersRef = useRef<{ [userId: string]: RTCPeerConnection }>({});
+  const myStreamRef = useRef<MediaStream | null>(null);
+
+  const isHost = user.role === 'host' || user.role === 'instructor';
+
+  // Get focused video (selected user or host if no selection)
+  const focusedUserId = selectedUserId || (isHost ? null : user._id);
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-300">Loading session...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-gray-300">Loading session...</p>
         </div>
       </div>
     );
@@ -102,23 +111,131 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
     toast.success('Session has ended');
   };
 
-  const createPeer = (userToSignal: string, callerID: string, currentStream: MediaStream) => {
-    const peer = new Peer({ initiator: true, trickle: false, stream: currentStream });
-    peer.on('signal', (signal: Peer.SignalData) => {
-      socketRef.current.emit('sending-signal', { userToSignal, callerID, signal });
+  // ================= WEBRTC PEER CONNECTION =================
+  const createPeerConnection = (targetUserId: string): RTCPeerConnection => {
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
     });
-    return peer;
+
+    // Add local stream tracks to peer connection
+    if (myStreamRef.current) {
+      myStreamRef.current.getTracks().forEach(track => {
+        if (myStreamRef.current) {
+          pc.addTrack(track, myStreamRef.current);
+        }
+      });
+    }
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current.emit('ice-candidate', {
+          targetUserId,
+          candidate: event.candidate,
+          userId: user._id
+        });
+      }
+    };
+
+    // Handle remote stream
+    pc.ontrack = (event) => {
+      console.log(`Received remote stream from ${targetUserId}`);
+      const [remoteStream] = event.streams;
+      setRemoteStreams(prev => ({
+        ...prev,
+        [targetUserId]: remoteStream
+      }));
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`Connection state with ${targetUserId}:`, pc.connectionState);
+    };
+
+    return pc;
   };
 
-  const addPeer = (incomingSignal: Peer.SignalData, callerID: string, currentStream: MediaStream) => {
-    const peer = new Peer({ initiator: false, trickle: false, stream: currentStream });
-    peer.on('signal', (signal: Peer.SignalData) => {
-      socketRef.current.emit('returning-signal', { signal, callerID });
-    });
-    peer.signal(incomingSignal);
-    return peer;
+  const initiateCall = async (targetUserId: string) => {
+    try {
+      const pc = createPeerConnection(targetUserId);
+      peersRef.current[targetUserId] = pc;
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      socketRef.current.emit('offer', {
+        targetUserId,
+        offer,
+        userId: user._id
+      });
+    } catch (error) {
+      console.error('Error initiating call:', error);
+    }
   };
 
+  const handleOffer = async (from: string, offer: RTCSessionDescriptionInit) => {
+    try {
+      const pc = createPeerConnection(from);
+      peersRef.current[from] = pc;
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socketRef.current.emit('answer', {
+        targetUserId: from,
+        answer,
+        userId: user._id
+      });
+    } catch (error) {
+      console.error('Error handling offer:', error);
+    }
+  };
+
+  const handleAnswer = async (from: string, answer: RTCSessionDescriptionInit) => {
+    try {
+      const pc = peersRef.current[from];
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    } catch (error) {
+      console.error('Error handling answer:', error);
+    }
+  };
+
+  const handleIceCandidate = async (from: string, candidate: RTCIceCandidateInit) => {
+    try {
+      const pc = peersRef.current[from];
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (error) {
+      console.error('Error handling ICE candidate:', error);
+    }
+  };
+
+  const removePeer = (userId: string) => {
+    const pc = peersRef.current[userId];
+    if (pc) {
+      pc.close();
+      delete peersRef.current[userId];
+    }
+    setRemoteStreams(prev => {
+      const updated = { ...prev };
+      delete updated[userId];
+      return updated;
+    });
+    setParticipants(prev => {
+      const updated = new Map(prev);
+      updated.delete(userId);
+      return updated;
+    });
+  };
+
+  // ================= SOCKET.IO =================
   useEffect(() => {
     const socketUrl = getSocketUrl();
     socketRef.current = io(socketUrl, {
@@ -127,9 +244,7 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       reconnectionAttempts: 5,
-      auth: {
-        token: localStorage.getItem('token')
-      }
+      auth: { token: localStorage.getItem('token') }
     });
 
     socketRef.current.on('connect_error', (error: any) => {
@@ -141,79 +256,203 @@ const VideoChat: React.FC<{ user: User; session: Session; onLogout: () => void }
       console.log('Socket disconnected');
     });
 
+    socketRef.current.on('connect', () => {
+      console.log('Connected to socket server');
+      setStatusMessage('Connected to server');
+    });
+
     return () => {
       socketRef.current?.disconnect();
     };
   }, []);
 
+  // Setup socket event listeners
   useEffect(() => {
-    if (session && session._id) {
-      fetchAnalytics();
-    }
-  }, [session]);
+    if (!socketRef.current) return;
 
+    // Room joined
+    socketRef.current.on('room-joined', (data: any) => {
+      console.log('Room joined:', data);
+      setStatusMessage('Joined room successfully');
+
+      // Initiate calls to existing participants
+      if (data.participants) {
+        data.participants.forEach((participant: any) => {
+          initiateCall(participant.userId);
+        });
+      }
+    });
+
+    // User joined
+    socketRef.current.on('user-joined', (data: any) => {
+      console.log('User joined:', data);
+      const { userId, userInfo, socketId } = data;
+
+      setParticipants(prev => {
+        const updated = new Map(prev);
+        updated.set(userId, {
+          userId,
+          socketId,
+          userInfo: userInfo || { userId, role: 'student' }
+        });
+        return updated;
+      });
+
+      setParticipantsCount(prev => prev + 1);
+      toast.success(`${userInfo?.name || 'Someone'} joined the room`);
+
+      // Initiate call to new user
+      initiateCall(userId);
+    });
+
+    // User left
+    socketRef.current.on('user-left', (data: any) => {
+      console.log('User left:', data);
+      const { userId } = data;
+
+      removePeer(userId);
+      setParticipantsCount(prev => Math.max(1, prev - 1));
+      toast.success('Someone left the room');
+    });
+
+    // WebRTC signaling
+    socketRef.current.on('offer', (data: any) => {
+      handleOffer(data.from, data.offer);
+    });
+
+    socketRef.current.on('answer', (data: any) => {
+      handleAnswer(data.from, data.answer);
+    });
+
+    socketRef.current.on('ice-candidate', (data: any) => {
+      handleIceCandidate(data.from, data.candidate);
+    });
+
+    // Attendance events
+    socketRef.current.on('attendance_approved', (data: any) => {
+      if (data.studentId === user._id) {
+        setRequestStatus('approved');
+        setStatusMessage('✅ Your attendance was approved!');
+        toast.success(data.message);
+      }
+    });
+
+    socketRef.current.on('attendance_rejected', (data: any) => {
+      if (data.studentId === user._id) {
+        setRequestStatus('rejected');
+        setStatusMessage('❌ Your request was rejected');
+        toast.error(data.message);
+      }
+    });
+
+    socketRef.current.on('new_attendance_request', (data: any) => {
+      if (isHost) {
+        setPendingRequests(prev => [...prev, data.request]);
+        toast.success(`📋 New attendance request from ${data.request.studentName}`);
+      }
+    });
+
+    socketRef.current.on('pending_requests', (data: any) => {
+      setPendingRequests(data.requests);
+    });
+
+    socketRef.current.on('request_error', (data: any) => {
+      toast.error(data.error);
+    });
+
+    socketRef.current.on('request_sent', (data: any) => {
+      setRequestStatus('sent');
+      setStatusMessage(data.message);
+    });
+
+    socketRef.current.on('session-ended', (data: any) => {
+      if (data.roomId === roomId) {
+        handleSessionEnded();
+      }
+    });
+
+    socketRef.current.on('reaction', (reaction: any) => {
+      setReactions(prev => [...prev, reaction]);
+      setTimeout(() => {
+        setReactions(prev => prev.filter(item => item.id !== reaction.id));
+      }, 3200);
+    });
+
+    return () => {
+      socketRef.current.off();
+    };
+  }, [user._id, isHost, roomId]);
+
+  // Get user media
+  useEffect(() => {
+    navigator.mediaDevices
+      .getUserMedia({ video: camOn, audio: micOn })
+      .then((media) => {
+        setStream(media);
+        myStreamRef.current = media;
+        if (myVideo.current) myVideo.current.srcObject = media;
+      })
+      .catch((err) => {
+        console.error('Error accessing media devices:', err);
+        toast.error('Camera/microphone access denied or unavailable.');
+      });
+
+    return () => {
+      myStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, [camOn, micOn]);
+
+  // Join room
   const joinRoomById = async (targetRoomId: string) => {
     if (!targetRoomId) return;
 
     try {
-// Step 1: Check session (PUBLIC)
-// const res = await axios.get(
-//   `${getBackendUrl()}/api/sessions/public/join/${targetRoomId}`
-// );
+      socketRef.current.emit('join-room', {
+        roomId: targetRoomId,
+        userId: user._id,
+        userInfo: {
+          userId: user._id,
+          name: user.name,
+          role: user.role
+        }
+      });
 
-// // Step 2: Join session (PRIVATE with token)
-// const config = { 
-//   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } 
-// };
-
-// const response = await axios.post(
-//   `${getBackendUrl()}/api/sessions/${res.data.sessionId}/join`,
-//   {},
-//   config
-// );
-//       console.log('Join session response:', response.data);
-
-console.log("Joining demo room (no backend)");
-
-socketRef.current.emit("join-room", targetRoomId, user._id);
-
-
-      socketRef.current.emit('join-room', targetRoomId, user._id);
-      
-      // If user is host or instructor, join the host room to receive requests
-      if (user.role === 'host' || user.role === 'instructor') {
-        getHostPendingRequests();
+      if (isHost) {
+        socketRef.current.emit('join_session_as_host', session._id);
       }
-      
+
       setJoined(true);
-      setParticipantsCount((session.participants?.length || 0) + 1);
+      setRoomId(targetRoomId);
+      setParticipantsCount(1);
       fetchRequestStatus();
       toast.success('Joined the meeting');
     } catch (error: any) {
       console.error('Failed to join session:', error);
-
-      let errorMsg = 'Failed to join session';
-      if (error.response?.data?.error) {
-        errorMsg = error.response.data.error;
-      } else if (error.message) {
-        errorMsg = error.message;
-      }
-
-      toast.error(errorMsg);
+      toast.error(error.response?.data?.error || 'Failed to join session');
     }
   };
 
   const joinRoom = () => {
-    joinRoomById(roomId);
+    if (roomId) {
+      joinRoomById(roomId);
+    }
   };
 
   const leaveRoom = () => {
-    socketRef.current.emit('leave-room', roomId, user._id);
+    socketRef.current.emit('leave-room', {
+      roomId,
+      userId: user._id
+    });
     setJoined(false);
     setRoomId('');
-    setPeers({});
+
+    // Close all peer connections
+    Object.values(peersRef.current).forEach(pc => pc.close());
     peersRef.current = {};
-    stream?.getTracks().forEach((t) => t.stop());
+    setRemoteStreams({});
+    setParticipants(new Map());
+
+    myStreamRef.current?.getTracks().forEach((t) => t.stop());
     setStream(null);
   };
 
@@ -221,7 +460,6 @@ socketRef.current.emit("join-room", targetRoomId, user._id);
     try {
       const config = { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } };
       await axios.post(`${getBackendUrl()}/api/sessions/${session._id}/end`, {}, config);
-
       await fetchFinalAttendance();
       toast.success('Session ended successfully');
       leaveRoom();
@@ -246,225 +484,86 @@ socketRef.current.emit("join-room", targetRoomId, user._id);
     }
   };
 
-  useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({ video: camOn, audio: micOn })
-      .then((media) => {
-        setStream(media);
-        if (myVideo.current) myVideo.current.srcObject = media;
-      })
-      .catch((err) => {
-        console.error('Error accessing media devices:', err);
-        toast.error('Camera/microphone access denied or unavailable.');
-      });
-
-    return () => {
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, [camOn, micOn]);
-
-  useEffect(() => {
-    socketRef.current.on('connect', () => {
-      console.log('Connected to socket');
-    });
-
-    socketRef.current.on('user-joined', (userId: string) => {
-      setParticipantsCount((count) => count + 1);
-      if (!stream || peersRef.current[userId]) return;
-      const peer = createPeer(userId, user._id, stream);
-      peersRef.current[userId] = peer;
-      setPeers((prev) => ({ ...prev, [userId]: peer }));
-    });
-
-    socketRef.current.on('receiving-signal', ({ from, signal }: { from: string; signal: Peer.SignalData }) => {
-      if (!stream) return;
-      const peer = addPeer(signal, from, stream);
-      peersRef.current[from] = peer;
-      setPeers((prev) => ({ ...prev, [from]: peer }));
-    });
-
-    socketRef.current.on('receiving-returned-signal', ({ id, signal }: { id: string; signal: Peer.SignalData }) => {
-      peersRef.current[id]?.signal(signal);
-    });
-
-    socketRef.current.on('user-left', (id: string) => {
-      peersRef.current[id]?.destroy();
-      delete peersRef.current[id];
-      setParticipantsCount((count) => Math.max(1, count - 1));
-      setPeers((prev) => {
-        const updated = { ...prev };
-        delete updated[id];
-        return updated;
-      });
-    });
-
-    socketRef.current.on('attendance-update', (data: { userId: string; present: boolean; presentTime?: number }) => {
-      setAttendance((prev) => ({ ...prev, [data.userId]: data.present }));
-      if (data.userId === user._id && data.presentTime !== undefined) {
-        setStatusMessage(`Present for ${Math.round(data.presentTime)}s`);
-      }
-    });
-
-    socketRef.current.on('attendance-request', () => {
-      if (user.role === 'instructor') {
-        setStatusMessage('New attendance request received');
-      }
-    });
-
-    socketRef.current.on('attendance-request-status', (data: any) => {
-      if (data.studentId === user._id) {
-        setRequestStatus(data.status);
-        setStatusMessage(`Request ${data.status}`);
-      }
-    });
-
-    socketRef.current.on('reaction', (reaction: { id: string; emoji: string; sender: string }) => {
-      setReactions((prev) => [...prev, reaction]);
-      window.setTimeout(() => {
-        setReactions((prev) => prev.filter((item) => item.id !== reaction.id));
-      }, 3200);
-    });
-
-    socketRef.current.on('session-ended', (data: { sessionId: string; roomId: string }) => {
-      if (data.roomId !== roomId) return;
-      handleSessionEnded();
-    });
-
-    /* ============ REAL-TIME ATTENDANCE REQUEST EVENTS ============ */
-
-    // Student receives notification when their request is approved
-    socketRef.current.on('attendance_approved', (data: { studentId: string; message: string; timestamp: string }) => {
-      if (data.studentId === user._id) {
-        setRequestStatus('approved');
-        setStatusMessage('✅ Your attendance was approved!');
-        toast.success(data.message);
-      }
-    });
-
-    // Student receives notification when their request is rejected
-    socketRef.current.on('attendance_rejected', (data: { studentId: string; message: string; timestamp: string }) => {
-      if (data.studentId === user._id) {
-        setRequestStatus('rejected');
-        setStatusMessage('❌ Your request was rejected');
-        toast.error(data.message);
-      }
-    });
-
-    // Host receives new attendance requests
-    socketRef.current.on('new_attendance_request', (data: { request: AttendanceRequest; totalPending: number }) => {
-      if (user.role === 'host' || user.role === 'instructor') {
-        setPendingRequests((prev) => [...prev, data.request]);
-        toast(`📋 New attendance request from ${data.request.studentName}`);
-      }
-    });
-
-    // Get list of pending requests
-    socketRef.current.on('pending_requests', (data: { requests: AttendanceRequest[]; total: number }) => {
-      setPendingRequests(data.requests);
-    });
-
-    // Request error handling
-    socketRef.current.on('request_error', (data: { error: string }) => {
-      toast.error(data.error);
-    });
-
-    // Request sent confirmation
-    socketRef.current.on('request_sent', (data: { requestId: string; message: string }) => {
-      setRequestStatus('sent');
-      setStatusMessage(data.message);
-    });
-
-    // Authorization response from host
-    socketRef.current.on('request_approved', (data: { studentId: string; studentName: string; requestId: string; timestamp: string }) => {
-      // Remove approved request from list
-      setPendingRequests((prev) => prev.filter(r => r.id !== data.requestId));
-    });
-
-    // Rejection response from host
-    socketRef.current.on('request_rejected', (data: { studentId: string; studentName: string; requestId: string; reason: string; timestamp: string }) => {
-      // Remove rejected request from list
-      setPendingRequests((prev) => prev.filter(r => r.id !== data.requestId));
-    });
-
-    /* ============ END REAL-TIME EVENTS ============ */
-
-    return () => {
-      socketRef.current.off();
-    };
-  }, [stream, user.role, user._id, roomId]);
-const captureAndSendFrame = async () => {
-  if (!myVideo.current || !user._id) return;
-  if (myVideo.current.videoWidth === 0) return;
-
-  setTotalTime((prev) => prev + 10);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = myVideo.current.videoWidth;
-  canvas.height = myVideo.current.videoHeight;
-
-  const ctx = canvas.getContext('2d');
-  ctx?.drawImage(myVideo.current, 0, 0);
-
-  canvas.toBlob(async (blob) => {
-    if (!blob) return;
-
-    const formData = new FormData();
-    formData.append('image', blob, 'frame.jpg');
-
+  const fetchRequestStatus = async () => {
     try {
-      setFaceDetectionState('processing');
-
-      const aiUrl = getAIServiceUrl();
-      
-      // Check if AI service URL is valid before calling
-      if (!aiUrl || aiUrl.includes('undefined')) {
-        setFaceDetectionState('not-detected');
-        setStatusMessage('⚠️ AI service not configured');
-        return;
-      }
-
-      const { data } = await axios.post(`${aiUrl}/api/recognize`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 8000, // 8 second timeout
+      const res = await axios.get(`${getBackendUrl()}/api/attendance/requests/${session._id}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
-
-      if (data.success && data.recognized_users && data.recognized_users.length > 0) {
-        setFaceCount(data.recognized_users.length);
-        setFaceDetectionState('detected');
-
-        if (data.recognized_users.includes(user._id)) {
-          setPresentTime((prev) => prev + 10);
-
-          await axios.post(
-            `${getBackendUrl()}/api/attendance/update`,
-            { studentId: user._id, sessionId: session._id, timeIncrement: 10 },
-            { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
-          );
-
-          setStatusMessage('✅ Face detected - Tracking attendance');
-        } else {
-          setStatusMessage('❌ Face not recognized - Ensure good lighting');
-        }
-      } else {
-        setFaceCount(0);
-        setFaceDetectionState('not-detected');
-        setStatusMessage('❌ No face detected - Please face the camera');
+      const myRequest = res.data.requests.find((r: any) => r.studentId === user._id);
+      if (myRequest) {
+        setRequestStatus(myRequest.status);
       }
-    } catch (error: any) {
-      setFaceDetectionState('not-detected');
-
-      if (error.response?.status === 404) {
-        console.warn('AI recognition endpoint not found (404). Check AI service route.');
-        setStatusMessage('⚠️ Face recognition unavailable (service offline)');
-      } else if (error.code === 'ECONNABORTED') {
-        setStatusMessage('⚠️ Face recognition timed out');
-      } else {
-        setStatusMessage('⚠️ Face recognition service unavailable');
-      }
+    } catch (error) {
+      console.error('Fetch request status error:', error);
     }
-  }, 'image/jpeg', 0.8);
-};
+  };
 
+  // Face detection for attendance
+  const captureAndSendFrame = async () => {
+    if (!myVideo.current || !user._id) return;
+    if (myVideo.current.videoWidth === 0) return;
+
+    setTotalTime(prev => prev + 10);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = myVideo.current.videoWidth;
+    canvas.height = myVideo.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx?.drawImage(myVideo.current, 0, 0);
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) return;
+
+      const formData = new FormData();
+      formData.append('image', blob, 'frame.jpg');
+
+      try {
+        setFaceDetectionState('processing');
+        const aiUrl = getAIServiceUrl();
+
+        if (!aiUrl || aiUrl.includes('undefined')) {
+          setFaceDetectionState('not-detected');
+          setStatusMessage('⚠️ AI service not configured');
+          return;
+        }
+
+        const { data } = await axios.post(`${aiUrl}/api/recognize`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 8000
+        });
+
+        if (data.success && data.recognized_users && data.recognized_users.length > 0) {
+          setFaceCount(data.recognized_users.length);
+          setFaceDetectionState('detected');
+
+          if (data.recognized_users.includes(user._id)) {
+            setPresentTime(prev => prev + 10);
+            await axios.post(
+              `${getBackendUrl()}/api/attendance/update`,
+              { studentId: user._id, sessionId: session._id, timeIncrement: 10 },
+              { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+            );
+            setStatusMessage('✅ Face detected - Tracking attendance');
+          } else {
+            setStatusMessage('❌ Face not recognized - Ensure good lighting');
+          }
+        } else {
+          setFaceCount(0);
+          setFaceDetectionState('not-detected');
+          setStatusMessage('❌ No face detected - Please face the camera');
+        }
+      } catch (error: any) {
+        setFaceDetectionState('not-detected');
+        if (error.code === 'ECONNABORTED') {
+          setStatusMessage('⚠️ Face recognition timed out');
+        } else {
+          setStatusMessage('⚠️ Face recognition service unavailable');
+        }
+      }
+    }, 'image/jpeg', 0.8);
+  };
+
+  // Attendance request handlers
   const emitReaction = (emoji: string) => {
     if (!joined || !roomId) return;
     socketRef.current.emit('reaction', {
@@ -483,9 +582,7 @@ const captureAndSendFrame = async () => {
         studentName: user.name || 'Unknown Student',
         sessionId: session._id
       });
-      // Response will come via socket events
     } catch (error: any) {
-      console.error('Request attendance error:', error);
       setStatusMessage('Failed to send attendance request');
       toast.error('Failed to send attendance request');
     } finally {
@@ -510,34 +607,22 @@ const captureAndSendFrame = async () => {
     });
   };
 
-  const getHostPendingRequests = () => {
-    socketRef.current.emit('join_session_as_host', session._id);
-  };
-
-  const fetchRequestStatus = async () => {
-    try {
-      const res = await axios.get(`${getBackendUrl()}/api/attendance/requests/${session._id}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
-      const myRequest = res.data.requests.find((r: any) => r.studentId === user._id);
-      if (myRequest) {
-        setRequestStatus(myRequest.status);
-      }
-    } catch (error) {
-      console.error('Fetch request status error:', error);
+  // Effects
+  useEffect(() => {
+    if (session && session._id) {
+      fetchAnalytics();
     }
-  };
+  }, [session]);
 
   useEffect(() => {
     if (!stream || !roomId || !joined || sessionEnded) return;
-    const id = setInterval(captureAndSendFrame, 10000); // Every 10 seconds
+    const id = setInterval(captureAndSendFrame, 10000);
     return () => clearInterval(id);
   }, [stream, roomId, joined, sessionEnded]);
 
   useEffect(() => {
     if (session && session.endTime) {
       const endMs = new Date(session.endTime).getTime();
-
       const updateRemaining = () => {
         const remainingSeconds = Math.max(Math.ceil((endMs - Date.now()) / 1000), 0);
         setSessionRemaining(remainingSeconds);
@@ -545,13 +630,10 @@ const captureAndSendFrame = async () => {
           handleSessionEnded();
         }
       };
-
       updateRemaining();
       const timer = window.setInterval(updateRemaining, 1000);
       return () => window.clearInterval(timer);
     }
-
-    return undefined;
   }, [session.endTime, sessionEnded]);
 
   useEffect(() => {
@@ -560,6 +642,105 @@ const captureAndSendFrame = async () => {
       setTimeout(() => joinRoomById(session.roomId), 1000);
     }
   }, [session, sessionEnded]);
+
+  // ================= ZOOM-LIKE VIDEO LAYOUT =================
+  const VideoTile: React.FC<{
+    stream: MediaStream | null;
+    userId: string;
+    isHost: boolean;
+    name: string;
+    isMainView?: boolean;
+    onClick?: () => void;
+  }> = ({ stream, userId, isHost, name, isMainView, onClick }) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    useEffect(() => {
+      if (videoRef.current && stream) {
+        videoRef.current.srcObject = stream;
+      }
+    }, [stream]);
+
+    return (
+      <motion.div
+        whileHover={!isMainView ? { scale: 1.02 } : undefined}
+        onClick={onClick}
+        className={`relative overflow-hidden rounded-xl bg-gray-900 ${
+          isMainView
+            ? 'w-full h-full'
+            : 'w-full h-24 cursor-pointer hover:ring-2 hover:ring-purple-500'
+        }`}
+      >
+        {stream ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={userId === user._id}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-gray-800">
+            <div className="text-center">
+              <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-gray-700 flex items-center justify-center">
+                <span className="text-xl">👤</span>
+              </div>
+              <span className="text-xs text-gray-400">No video</span>
+            </div>
+          </div>
+        )}
+
+        {/* Name tag */}
+        <div className={`absolute bottom-2 left-2 px-2 py-1 rounded-lg ${
+          isHost ? 'bg-yellow-500/80' : 'bg-black/60'
+        } backdrop-blur-sm`}>
+          <span className={`text-xs font-medium ${isHost ? 'text-black' : 'text-white'}`}>
+            {name} {userId === user._id && '(You)'}
+            {isHost && ' 👑'}
+          </span>
+        </div>
+
+        {/* Mute indicator */}
+        {!micOn && userId === user._id && (
+          <div className="absolute top-2 right-2 w-8 h-8 bg-red-500/80 rounded-full flex items-center justify-center">
+            <MicOff className="w-4 h-4 text-white" />
+          </div>
+        )}
+      </motion.div>
+    );
+  };
+
+  // Get all participants for the video grid
+  const getAllParticipants = () => {
+    const all: Array<{ userId: string; stream: MediaStream | null; isHost: boolean; name: string }> = [];
+
+    // Add self
+    all.push({
+      userId: user._id,
+      stream: stream,
+      isHost,
+      name: user.name || 'You'
+    });
+
+    // Add remote participants
+    participants.forEach((participant, userId) => {
+      if (userId !== user._id) {
+        all.push({
+          userId,
+          stream: remoteStreams[userId] || null,
+          isHost: participant.userInfo?.role === 'host' || participant.userInfo?.role === 'instructor',
+          name: participant.userInfo?.name || 'Participant'
+        });
+      }
+    });
+
+    return all;
+  };
+
+  const allParticipants = getAllParticipants();
+
+  // Separate main video and grid videos based on selection
+  const mainParticipant = allParticipants.find(p => p.userId === focusedUserId) || allParticipants[0];
+  const gridParticipants = allParticipants.filter(p => p.userId !== mainParticipant?.userId);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 dark:from-slate-900 dark:via-purple-900 dark:to-slate-900">
@@ -635,13 +816,13 @@ const captureAndSendFrame = async () => {
             <AttendanceProgressBar
               presentTime={presentTime}
               totalTime={totalTime}
-              participantsPresent={participantsPresent}
-              totalParticipants={Object.keys(peers).length + 1}
+              participantsPresent={Math.max(0, participantsCount - 1)}
+              totalParticipants={participantsCount}
               sessionStatus={sessionEnded ? 'ended' : 'active'}
             />
 
             {/* Pending Requests Panel - For Hosts */}
-            {(user.role === 'host' || user.role === 'instructor') && (
+            {isHost && (
               <PendingRequests
                 requests={pendingRequests}
                 onApprove={approveAttendanceRequest}
@@ -649,24 +830,40 @@ const captureAndSendFrame = async () => {
               />
             )}
 
-            {/* Video Grid */}
-            <div className="flex-1 p-4 bg-gradient-to-br from-slate-900/50 via-purple-900/50 to-slate-900/50 min-h-screen">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5 }}
-                className="w-full h-full"
-              >
-                <ParticipantsGrid
-                  myVideo={myVideo}
-                  myName={user.name}
-                  isHost={user.role === 'host' || user.role === 'instructor'}
-                  peers={peers}
-                  peerMetadata={{}}
-                  micOn={micOn}
-                  videoOn={camOn}
-                />
-              </motion.div>
+            {/* MAIN VIDEO LAYOUT - Zoom Style */}
+            <div className="flex-1 p-4 flex gap-4 overflow-hidden">
+              {/* Main Video Area */}
+              <div className="flex-1 flex flex-col">
+                {/* Main Large Video */}
+                <div className="flex-1 rounded-2xl overflow-hidden bg-gray-900 relative">
+                  {mainParticipant && (
+                    <VideoTile
+                      stream={mainParticipant.stream}
+                      userId={mainParticipant.userId}
+                      isHost={mainParticipant.isHost}
+                      name={mainParticipant.name}
+                      isMainView={true}
+                    />
+                  )}
+                </div>
+
+                {/* Small Grid at Bottom */}
+                {gridParticipants.length > 0 && (
+                  <div className="mt-4 flex gap-2 overflow-x-auto pb-2">
+                    {gridParticipants.map((participant) => (
+                      <div key={participant.userId} className="w-40 h-24 flex-shrink-0">
+                        <VideoTile
+                          stream={participant.stream}
+                          userId={participant.userId}
+                          isHost={participant.isHost}
+                          name={participant.name}
+                          onClick={() => setSelectedUserId(participant.userId)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Face Detection Overlay */}
@@ -726,7 +923,7 @@ const captureAndSendFrame = async () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="fixed bottom-24 left-4 right-4 z-40"
+                className="fixed bottom-24 left-4 right-4 z-40 max-w-md"
               >
                 <div className="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 rounded-2xl p-6 shadow-2xl">
                   <h3 className="text-white font-semibold mb-4">Manual Attendance Request</h3>
@@ -829,7 +1026,7 @@ const captureAndSendFrame = async () => {
                 <div className="w-px h-8 bg-white/30" />
 
                 {/* Host Controls */}
-                {user.role === 'instructor' && (
+                {isHost && (
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
@@ -867,7 +1064,7 @@ const captureAndSendFrame = async () => {
 
             {/* Side Panel */}
             <AnimatePresence>
-              {showPanel && user.role === 'instructor' && (
+              {showPanel && isHost && (
                 <motion.div
                   initial={{ x: '100%' }}
                   animate={{ x: 0 }}
@@ -898,12 +1095,7 @@ const captureAndSendFrame = async () => {
 
                     <div className="space-y-6">
                       {/* Session Info */}
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.1 }}
-                        className="backdrop-blur-md bg-white/10 rounded-xl p-4"
-                      >
+                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
                         <h4 className="text-white font-semibold mb-3 flex items-center">
                           <Info className="w-5 h-5 mr-2" />
                           Session Info
@@ -917,15 +1109,10 @@ const captureAndSendFrame = async () => {
                             <p className="text-gray-300"><strong>Time Left:</strong> {formatRemainingTime(sessionRemaining)}</p>
                           )}
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Analytics */}
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.2 }}
-                        className="backdrop-blur-md bg-white/10 rounded-xl p-4"
-                      >
+                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
                         <h4 className="text-white font-semibold mb-3 flex items-center">
                           <BarChart3 className="w-5 h-5 mr-2" />
                           Analytics
@@ -935,47 +1122,10 @@ const captureAndSendFrame = async () => {
                           <p className="text-gray-300"><strong>Avg Attendance:</strong> {analytics.avgAttendance}%</p>
                           <p className="text-gray-300"><strong>Session Active:</strong> {analytics.activeNow ? 'Yes' : 'No'}</p>
                         </div>
-                      </motion.div>
-
-                      {/* Attendance */}
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.3 }}
-                        className="backdrop-blur-md bg-white/10 rounded-xl p-4"
-                      >
-                        <h4 className="text-white font-semibold mb-3 flex items-center">
-                          <CheckCircle className="w-5 h-5 mr-2" />
-                          AI Attendance
-                        </h4>
-                        <p className="text-gray-400 text-sm mb-3">Real-time face detection tracking</p>
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-300">{user.name}:</span>
-                            <span className={`font-medium ${attendance[user._id] ? 'text-green-400' : 'text-red-400'}`}>
-                              {attendance[user._id] ? 'Present' : 'Absent'}
-                            </span>
-                          </div>
-                          {Object.entries(attendance)
-                            .filter(([id]) => id !== user._id)
-                            .map(([id, present]) => (
-                              <div key={id} className="flex items-center justify-between text-sm">
-                                <span className="text-gray-300">{id}:</span>
-                                <span className={`font-medium ${present ? 'text-green-400' : 'text-red-400'}`}>
-                                  {present ? 'Present' : 'Absent'}
-                                </span>
-                              </div>
-                            ))}
-                        </div>
-                      </motion.div>
+                      </div>
 
                       {/* Host Controls */}
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.4 }}
-                        className="backdrop-blur-md bg-white/10 rounded-xl p-4"
-                      >
+                      <div className="backdrop-blur-md bg-white/10 rounded-xl p-4">
                         <h4 className="text-white font-semibold mb-3 flex items-center">
                           <Settings className="w-5 h-5 mr-2" />
                           Host Controls
@@ -989,29 +1139,8 @@ const captureAndSendFrame = async () => {
                           >
                             End Session
                           </motion.button>
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className="w-full py-2 backdrop-blur-md bg-white/20 hover:bg-white/30 border border-white/30 text-white font-medium rounded-lg transition-all duration-200"
-                          >
-                            Share Meeting Link
-                          </motion.button>
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className="w-full py-2 backdrop-blur-md bg-white/20 hover:bg-white/30 border border-white/30 text-white font-medium rounded-lg transition-all duration-200"
-                          >
-                            Invite Participants
-                          </motion.button>
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className="w-full py-2 backdrop-blur-md bg-white/20 hover:bg-white/30 border border-white/30 text-white font-medium rounded-lg transition-all duration-200"
-                          >
-                            Record Session
-                          </motion.button>
                         </div>
-                      </motion.div>
+                      </div>
                     </div>
                   </div>
                 </motion.div>

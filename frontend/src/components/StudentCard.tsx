@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Trash2, Edit2, Save, X } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Trash2, Edit2, Save, X, Camera, Upload, ImageIcon } from 'lucide-react';
 
 interface Student {
   id: string;
@@ -28,7 +28,77 @@ export const StudentCard: React.FC<StudentCardProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(student.name);
   const [editId, setEditId] = useState(student.studentId);
+  const [editImage, setEditImage] = useState<string | null>(student.imagePreview || null);
   const [error, setError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setError('Please select an image file');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Image size must be less than 5MB');
+      return;
+    }
+
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setEditImage(event.target?.result as string);
+      setIsUploading(false);
+      setError('');
+    };
+    reader.onerror = () => {
+      setError('Failed to load image');
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCaptureImage = async () => {
+    try {
+      setIsUploading(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      // Wait a moment for video to stabilize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(video, 0, 0);
+
+      const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      setEditImage(imageDataUrl);
+
+      // Stop all tracks
+      stream.getTracks().forEach(track => track.stop());
+      setIsUploading(false);
+      setError('');
+    } catch (err: any) {
+      console.error('Camera capture error:', err);
+      if (err.name === 'NotAllowedError') {
+        setError('Camera access denied. Please allow camera permissions.');
+      } else if (err.name === 'NotFoundError') {
+        setError('No camera found. Please connect a camera device.');
+      } else {
+        setError('Failed to capture image. Please try again.');
+      }
+      setIsUploading(false);
+    }
+  };
 
   const handleSave = () => {
     if (!editName.trim()) {
@@ -51,7 +121,8 @@ export const StudentCard: React.FC<StudentCardProps> = ({
     onUpdate({
       ...student,
       name: editName.trim(),
-      studentId: editId.trim()
+      studentId: editId.trim(),
+      imagePreview: editImage || student.imagePreview
     });
     setIsEditing(false);
   };
@@ -59,8 +130,13 @@ export const StudentCard: React.FC<StudentCardProps> = ({
   const handleCancel = () => {
     setEditName(student.name);
     setEditId(student.studentId);
+    setEditImage(student.imagePreview || null);
     setError('');
     setIsEditing(false);
+  };
+
+  const triggerFileInput = () => {
+    fileInputRef.current?.click();
   };
 
   return (
@@ -73,24 +149,102 @@ export const StudentCard: React.FC<StudentCardProps> = ({
     >
       {/* Image Container */}
       <div className="relative w-full h-56 bg-gradient-to-br from-purple-600/20 to-pink-600/20 dark:from-gray-900 dark:to-gray-800 overflow-hidden">
-        {student.imagePreview ? (
-          <motion.img
-            src={student.imagePreview}
-            alt={student.name}
-            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-400/30 dark:from-gray-700 to-gray-500/30 dark:to-gray-800">
-            <div className="text-center">
-              <div className="w-16 h-16 mx-auto mb-2 rounded-full bg-gray-400/20 dark:bg-gray-600/30 flex items-center justify-center">
-                <span className="text-3xl text-gray-500 dark:text-gray-400">👤</span>
+        <AnimatePresence mode="wait">
+          {isEditing ? (
+            <motion.div
+              key="editing-image"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="w-full h-full relative"
+            >
+              {/* Preview Image */}
+              {editImage ? (
+                <img
+                  src={editImage}
+                  alt="Preview"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-400/30 dark:from-gray-700 to-gray-500/30 dark:to-gray-800">
+                  <div className="text-center">
+                    <div className="w-16 h-16 mx-auto mb-2 rounded-full bg-gray-400/20 dark:bg-gray-600/30 flex items-center justify-center">
+                      <ImageIcon className="w-8 h-8 text-gray-500 dark:text-gray-400" />
+                    </div>
+                    <span className="text-sm text-gray-600 dark:text-gray-400">No Image Selected</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Upload Overlay */}
+              <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  className="hidden"
+                />
+
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={triggerFileInput}
+                  disabled={isUploading}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50"
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload Image
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleCaptureImage}
+                  disabled={isUploading}
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50"
+                >
+                  <Camera className="w-4 h-4" />
+                  Capture with Camera
+                </motion.button>
+
+                {isUploading && (
+                  <div className="flex items-center gap-2 text-white text-sm">
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing...
+                  </div>
+                )}
               </div>
-              <span className="text-sm text-gray-600 dark:text-gray-400">No Image</span>
-            </div>
-          </div>
-        )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="display-image"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="w-full h-full"
+            >
+              {student.imagePreview ? (
+                <motion.img
+                  src={student.imagePreview}
+                  alt={student.name}
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-400/30 dark:from-gray-700 to-gray-500/30 dark:to-gray-800">
+                  <div className="text-center">
+                    <div className="w-16 h-16 mx-auto mb-2 rounded-full bg-gray-400/20 dark:bg-gray-600/30 flex items-center justify-center">
+                      <span className="text-3xl text-gray-500 dark:text-gray-400">👤</span>
+                    </div>
+                    <span className="text-sm text-gray-600 dark:text-gray-400">No Image</span>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Content Container */}

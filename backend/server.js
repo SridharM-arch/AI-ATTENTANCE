@@ -146,8 +146,9 @@ io.use(async (socket, next) => {
   }
 });
 
-/* ============ IN-MEMORY ATTENDANCE REQUEST STORE ============ */
+/* ============ IN-MEMORY STORES ============ */
 const attendanceRequests = {}; // sessionId -> { requests: [], approvals: {} }
+const roomUsers = new Map(); // roomId -> Map<userId, { socketId, userId, joinedAt }>
 
 function getSessionRequests(sessionId) {
   if (!attendanceRequests[sessionId]) {
@@ -169,23 +170,126 @@ function removeRequest(sessionId, studentId) {
   session.requests = session.requests.filter(r => r.studentId !== studentId);
 }
 
+function getRoomUsers(roomId) {
+  if (!roomUsers.has(roomId)) {
+    roomUsers.set(roomId, new Map());
+  }
+  return roomUsers.get(roomId);
+}
+
+function addUserToRoom(roomId, userId, socketId) {
+  const users = getRoomUsers(roomId);
+  users.set(userId, { socketId, userId, joinedAt: new Date() });
+}
+
+function removeUserFromRoom(roomId, userId) {
+  const users = getRoomUsers(roomId);
+  users.delete(userId);
+  if (users.size === 0) {
+    roomUsers.delete(roomId);
+  }
+}
+
+function getAllRoomUsers(roomId) {
+  const users = getRoomUsers(roomId);
+  return Array.from(users.values());
+}
+
 /* ============ END STORE ============ */
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id, "User:", socket.userId);
+  socket.currentRoom = null;
 
-  socket.on("join-room", (roomId, userId) => {
+  // ============ ROOM MANAGEMENT ============
+  socket.on("join-room", (data) => {
+    const { roomId, userId, userInfo } = data;
     if (userId !== socket.userId) return; // Security check
+
+    // Leave previous room if any
+    if (socket.currentRoom && socket.currentRoom !== roomId) {
+      socket.leave(socket.currentRoom);
+      removeUserFromRoom(socket.currentRoom, userId);
+      socket.to(socket.currentRoom).emit("user-left", { userId, roomId: socket.currentRoom });
+    }
+
+    // Join new room
     socket.join(roomId);
-    socket.to(roomId).emit("user-joined", userId);
+    socket.currentRoom = roomId;
+    addUserToRoom(roomId, userId, socket.id);
+
+    console.log(`User ${userId} joined room ${roomId}`);
+
+    // Get all users in room (excluding current user)
+    const roomUsersList = getAllRoomUsers(roomId).filter(u => u.userId !== userId);
+
+    // Notify current user about existing participants
+    socket.emit("room-joined", {
+      roomId,
+      userId,
+      participants: roomUsersList,
+      message: "Joined room successfully"
+    });
+
+    // Notify others about new user
+    socket.to(roomId).emit("user-joined", {
+      userId,
+      socketId: socket.id,
+      userInfo: userInfo || { userId, role: 'student' },
+      timestamp: new Date()
+    });
   });
 
-  socket.on("leave-room", (roomId, userId) => {
-    if (userId !== socketA.userId) return;
+  socket.on("leave-room", (data) => {
+    const { roomId, userId } = data;
+    if (userId !== socket.userId) return;
+
     socket.leave(roomId);
-    socket.to(roomId).emit("user-left", userId);
+    removeUserFromRoom(roomId, userId);
+    socket.currentRoom = null;
+
+    socket.to(roomId).emit("user-left", { userId, roomId, timestamp: new Date() });
+    console.log(`User ${userId} left room ${roomId}`);
   });
 
+  // ============ WEBRTC SIGNALING ============
+  // Handle WebRTC Offer
+  socket.on("offer", (payload) => {
+    const { targetUserId, offer, userId } = payload;
+    if (userId !== socket.userId) return;
+
+    console.log(`Relaying offer from ${userId} to ${targetUserId}`);
+    io.to(targetUserId).emit("offer", {
+      from: userId,
+      offer,
+      fromSocketId: socket.id
+    });
+  });
+
+  // Handle WebRTC Answer
+  socket.on("answer", (payload) => {
+    const { targetUserId, answer, userId } = payload;
+    if (userId !== socket.userId) return;
+
+    console.log(`Relaying answer from ${userId} to ${targetUserId}`);
+    io.to(targetUserId).emit("answer", {
+      from: userId,
+      answer
+    });
+  });
+
+  // Handle ICE Candidates
+  socket.on("ice-candidate", (payload) => {
+    const { targetUserId, candidate, userId } = payload;
+    if (userId !== socket.userId) return;
+
+    io.to(targetUserId).emit("ice-candidate", {
+      from: userId,
+      candidate
+    });
+  });
+
+  // Legacy signaling support (for backward compatibility)
   socket.on("sending-signal", (payload) => {
     io.to(payload.userToSignal).emit("receiving-signal", {
       from: socket.userId,
@@ -410,7 +514,18 @@ io.on("connection", (socket) => {
   /* ============ END ATTENDANCE REQUEST HANDLERS ============ */
 
   socket.on('disconnect', () => {
-    console.log("User disconnected:", socket.id);
+    console.log("User disconnected:", socket.id, "User:", socket.userId);
+
+    // Remove user from current room
+    if (socket.currentRoom && socket.userId) {
+      removeUserFromRoom(socket.currentRoom, socket.userId);
+      socket.to(socket.currentRoom).emit("user-left", {
+        userId: socket.userId,
+        roomId: socket.currentRoom,
+        timestamp: new Date(),
+        reason: 'disconnect'
+      });
+    }
   });
 });
 

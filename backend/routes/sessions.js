@@ -158,6 +158,25 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Percentage cannot exceed 100%" });
     }
 
+    // CHECK: Only one active session allowed at a time
+    const existingActiveSession = await Session.findOne({
+      instructor: req.user.id,
+      isActive: true
+    });
+
+    if (existingActiveSession) {
+      return res.status(409).json({
+        error: "Active session already exists",
+        message: `You already have an active session: "${existingActiveSession.title}" (Room: ${existingActiveSession.roomId})`,
+        existingSession: {
+          _id: existingActiveSession._id,
+          title: existingActiveSession.title,
+          roomId: existingActiveSession.roomId,
+          isActive: existingActiveSession.isActive
+        }
+      });
+    }
+
     for (let attempt = 0; attempt < MAX_ROOM_ID_RETRIES; attempt += 1) {
       try {
         const startTime = new Date();

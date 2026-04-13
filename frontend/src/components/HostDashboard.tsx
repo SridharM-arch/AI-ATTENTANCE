@@ -168,10 +168,18 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       setNewSessionMinType('percentage');
       setNewSessionMinValue(75);
       toast.success('Session created successfully!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create session', error);
       if (axios.isAxiosError(error)) {
-        toast.error(error.response?.data?.error || 'Failed to create session');
+        // Handle 409 Conflict - Active session exists
+        if (error.response?.status === 409) {
+          const existingSession = error.response?.data?.existingSession;
+          toast.error(`Active session already exists: "${existingSession?.title}" (Room: ${existingSession?.roomId})`, {
+            duration: 5000
+          });
+        } else {
+          toast.error(error.response?.data?.error || error.response?.data?.message || 'Failed to create session');
+        }
       } else {
         toast.error('Failed to create session');
       }

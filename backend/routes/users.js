@@ -121,13 +121,88 @@ router.get('/students', authenticateToken, async (req, res) => {
   }
 });
 
-// Update user
+// Update user (basic)
 router.put('/:id', async (req, res) => {
   try {
     const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(user);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Update student with image upload - supports both base64 and file upload
+router.put('/:id/update-student', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, studentId } = req.body;
+
+    // Check if user exists
+    const existingUser = await User.findById(id);
+    if (!existingUser) {
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    // Check for duplicate studentId if changing
+    if (studentId && studentId !== existingUser.studentId) {
+      const duplicate = await User.findOne({ studentId, _id: { $ne: id } });
+      if (duplicate) {
+        return res.status(409).json({ error: 'Student ID is already in use' });
+      }
+    }
+
+    // Build update object
+    const updateData = {};
+    if (name) updateData.name = name.trim();
+    if (studentId) updateData.studentId = studentId.trim();
+
+    // Handle image upload
+    if (req.file) {
+      // File upload via multer
+      const savePath = `/uploads/face-images/${req.file.filename}`;
+      updateData.imagePath = savePath;
+
+      // Delete old image if exists
+      if (existingUser.imagePath) {
+        const oldPath = path.join(__dirname, '..', existingUser.imagePath.replace('/uploads/', 'uploads/'));
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+    } else if (req.body.imageBase64) {
+      // Base64 image upload
+      const base64Data = req.body.imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const filename = `student-${id}-${Date.now()}.jpg`;
+      const filepath = path.join(uploadDir, filename);
+
+      fs.writeFileSync(filepath, buffer);
+      updateData.imagePath = `/uploads/face-images/${filename}`;
+
+      // Delete old image if exists
+      if (existingUser.imagePath) {
+        const oldPath = path.join(__dirname, '..', existingUser.imagePath.replace('/uploads/', 'uploads/'));
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+    }
+
+    // Update user
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true }
+    ).select('-password');
+
+    res.json({
+      success: true,
+      message: 'Student updated successfully',
+      student: updatedUser
+    });
+  } catch (err) {
+    console.error('Update student error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
