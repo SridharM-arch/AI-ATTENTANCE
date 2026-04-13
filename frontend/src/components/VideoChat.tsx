@@ -13,7 +13,6 @@ interface VideoChatProps {
   user: User;
   session: Session;
   onLogout: () => void;
-  onLeave: () => void;
 }
 
 interface Participant {
@@ -114,7 +113,7 @@ VideoTile.displayName = 'VideoTile';
 // =====================================================
 // MAIN VIDEO CHAT COMPONENT
 // =====================================================
-const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave }) => {
+const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   // =====================================================
   // REFS - Stable references that don't cause re-renders
   // =====================================================
@@ -131,7 +130,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [isJoined, setIsJoined] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('Initializing...');
@@ -246,7 +244,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
   // =====================================================
   // WEBRTC PEER CONNECTION MANAGEMENT
   // =====================================================
-  const createPeerConnection = useCallback((targetUserId: string, targetSocketId: string): RTCPeerConnection => {
+  const createPeerConnection = useCallback((targetUserId: string): RTCPeerConnection => {
     // CRITICAL: Check if peer already exists - prevent duplicates
     if (peersRef.current.has(targetUserId)) {
       console.log(`[WEBRTC] Peer for ${targetUserId} already exists, reusing`);
@@ -325,9 +323,9 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
   // =====================================================
   // WEBRTC SIGNALING HANDLERS
   // =====================================================
-  const initiateCall = useCallback(async (targetUserId: string, targetSocketId: string) => {
+  const initiateCall = useCallback(async (targetUserId: string) => {
     try {
-      const pc = createPeerConnection(targetUserId, targetSocketId);
+      const pc = createPeerConnection(targetUserId);
 
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
@@ -349,10 +347,10 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
   }, [createPeerConnection, user._id]);
 
   const handleOffer = useCallback(async (data: any) => {
-    const { from, fromSocketId, offer } = data;
+    const { from, offer } = data;
 
     try {
-      const pc = createPeerConnection(from, fromSocketId);
+      const pc = createPeerConnection(from);
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -404,7 +402,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
     console.log('[ROOM] Joined:', data);
     hasJoinedRef.current = true;
     isConnectingRef.current = false;
-    setIsJoined(true);
     setConnectionStatus('In meeting');
 
     // Initiate calls to existing participants
@@ -424,7 +421,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
 
         // Then initiate call
         setTimeout(() => {
-          initiateCall(participant.userId, participant.socketId);
+          initiateCall(participant.userId);
         }, 500);
       });
     }
@@ -452,7 +449,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
 
     // Initiate call to new user
     setTimeout(() => {
-      initiateCall(userId, socketId);
+      initiateCall(userId);
     }, 500);
   }, [initiateCall]);
 
@@ -514,10 +511,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout, onLeave 
     setParticipants(new Map());
     hasJoinedRef.current = false;
     isConnectingRef.current = false;
-    setIsJoined(false);
-
-    onLeave();
-  }, [roomId, user._id, onLeave]);
+  }, [roomId, user._id]);
 
   // =====================================================
   // MEDIA CONTROLS
