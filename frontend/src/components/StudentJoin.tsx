@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-// import axios from 'axios';
+import axios from 'axios';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ArrowLeft, LogIn, Loader } from 'lucide-react';
 import type { Session } from '../types';
+import { getBackendUrl } from '../config';
 
 interface StudentJoinProps {
   onJoin: (session: Session) => void;
@@ -19,23 +20,45 @@ const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
 
   if (!sessionCode.trim()) {
-    toast.error("Please enter a session code");
+    toast.error("Please enter a room ID");
     return;
   }
 
   setLoading(true);
+  setStatus('checking');
 
-  setStatus('valid');
-  toast.success('Joining session...');
-
-  setTimeout(() => {
-    onJoin({
-      _id: sessionCode,
-      roomId: sessionCode
-    } as any);
-  }, 500);
-
-  setLoading(false);
+  try {
+    // CRITICAL: Validate session exists and is active via API
+    const response = await axios.get(`${getBackendUrl()}/api/sessions/public/join/${sessionCode.trim()}`);
+    
+    if (response.data && response.data.isActive) {
+      setStatus('valid');
+      toast.success('Joining session...');
+      
+      // Pass the real session data
+      onJoin({
+        _id: response.data._id,
+        roomId: response.data.roomId,
+        title: response.data.title,
+        isActive: response.data.isActive,
+        instructor: response.data.instructor
+      } as Session);
+    } else {
+      setStatus('invalid');
+      toast.error('Session is not active or does not exist');
+    }
+  } catch (error: any) {
+    console.error('[JOIN] Failed to validate session:', error);
+    setStatus('invalid');
+    
+    if (error.response?.status === 404) {
+      toast.error('Session not found. Please check the Room ID.');
+    } else {
+      toast.error(error.response?.data?.error || 'Failed to join session');
+    }
+  } finally {
+    setLoading(false);
+  }
 };
 
   return (
@@ -84,7 +107,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                 transition={{ delay: 0.3 }}
                 className="text-white/70"
               >
-                Enter the Room ID or Host ID provided by the instructor
+                Enter the Room ID provided by your instructor
               </motion.p>
             </div>
 
@@ -100,7 +123,7 @@ const handleSubmit = async (e: React.FormEvent) => {
               <div className="relative group">
                 <input
                   type="text"
-                  placeholder="Enter Room ID / Host ID"
+                  placeholder="Enter Room ID (e.g., a1b2c3d4)"
                   value={sessionCode}
                   onChange={(e) => {
                     setSessionCode(e.target.value);
@@ -162,7 +185,7 @@ const handleSubmit = async (e: React.FormEvent) => {
               transition={{ delay: 0.6 }}
               className="text-center text-sm text-white/60 mt-6"
             >
-              Ask your instructor for the Room ID or Host ID to join
+              Ask your instructor for the Room ID to join the live class
             </motion.p>
           </div>
         </div>

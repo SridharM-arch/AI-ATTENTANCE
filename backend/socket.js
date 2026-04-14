@@ -150,7 +150,7 @@ function initSocketIO(server) {
 
     // Handle WebRTC Offer
     socket.on('offer', (payload) => {
-      const { targetUserId, offer, userId } = payload;
+      const { targetUserId, targetSocketId, offer, userId } = payload;
 
       if (!targetUserId || !offer) {
         console.error('[SOCKET] Invalid offer payload');
@@ -183,7 +183,7 @@ function initSocketIO(server) {
 
     // Handle WebRTC Answer
     socket.on('answer', (payload) => {
-      const { targetUserId, answer, userId } = payload;
+      const { targetUserId, targetSocketId, answer, userId } = payload;
 
       if (!targetUserId || !answer) {
         console.error('[SOCKET] Invalid answer payload');
@@ -210,7 +210,7 @@ function initSocketIO(server) {
 
     // Handle ICE Candidates
     socket.on('ice-candidate', (payload) => {
-      const { targetUserId, candidate, userId } = payload;
+      const { targetUserId, targetSocketId, candidate, userId } = payload;
 
       if (!targetUserId || !candidate) {
         console.error('[SOCKET] Invalid ICE candidate payload');
@@ -273,7 +273,7 @@ function initSocketIO(server) {
       });
 
       // Confirm to student
-      socket.emit('attendance-request-confirmation', {
+      socket.emit('attendance-confirmation', {
         requestId,
         message: 'Request sent to host'
       });

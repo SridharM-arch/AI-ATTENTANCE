@@ -9,6 +9,43 @@ require('jspdf-autotable');
 const router = express.Router();
 router.use(authenticateToken);
 
+// POST /attendance/mark - Mark attendance directly (for host approval)
+router.post('/mark', async (req, res) => {
+  const { studentId, sessionId, status } = req.body;
+
+  if (!studentId || !sessionId || !status) {
+    return res.status(400).json({ error: 'studentId, sessionId, and status are required' });
+  }
+
+  try {
+    // Find or create attendance record
+    let attendance = await Attendance.findOne({ studentId, sessionId });
+    
+    if (attendance) {
+      attendance.status = status;
+      attendance.timestamp = new Date();
+      await attendance.save();
+    } else {
+      attendance = new Attendance({
+        studentId,
+        sessionId,
+        status,
+        timestamp: new Date()
+      });
+      await attendance.save();
+    }
+
+    res.json({
+      success: true,
+      attendance,
+      message: `Attendance marked as ${status}`
+    });
+  } catch (err) {
+    console.error('[Attendance] Mark error:', err);
+    res.status(500).json({ error: 'Failed to mark attendance' });
+  }
+});
+
 // POST /attendance/update - Update presentTime when face detected
 router.post('/update', async (req, res) => {
   const { studentId, sessionId, timeIncrement } = req.body;
