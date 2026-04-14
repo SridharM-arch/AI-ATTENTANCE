@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { motion } from 'framer-motion';
-import { Mic, MicOff, Camera, CameraOff, PhoneOff, Users, Crown } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mic, MicOff, Camera, CameraOff, PhoneOff, Users, Crown, CheckCircle, XCircle, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { getSocketUrl } from '../config';
@@ -22,14 +22,21 @@ interface Participant {
     name?: string;
     role?: string;
   };
-  stream?: MediaStream | null;
+  stream?: MediaStream;
+}
+
+interface AttendanceRequest {
+  id: string;
+  studentId: string;
+  studentName: string;
+  timestamp: number;
 }
 
 // =====================================================
 // VIDEO TILE COMPONENT - Memoized to prevent re-renders
 // =====================================================
 interface VideoTileProps {
-  stream: MediaStream | null;
+  stream?: MediaStream;
   userId: string;
   isLocal: boolean;
   isHost: boolean;
@@ -49,13 +56,19 @@ const VideoTile = React.memo<VideoTileProps>(({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // CRITICAL: Only set srcObject once when stream changes
+  // CRITICAL: Set srcObject when stream changes or component mounts
   useEffect(() => {
+    console.log(`[VIDEO] VideoTile mounted/updated for ${name}, has stream: ${!!stream}`);
     if (videoRef.current && stream) {
-      console.log(`[VIDEO] Setting stream for ${name} (${userId})`);
+      console.log(`[VIDEO] Setting srcObject for ${name}`);
       videoRef.current.srcObject = stream;
+      
+      // Force play to ensure video starts
+      videoRef.current.play().catch(err => {
+        console.warn(`[VIDEO] Autoplay failed for ${name}:`, err);
+      });
     }
-  }, [stream, userId, name]);
+  }, [stream, name, userId]);
 
   return (
     <motion.div
@@ -64,9 +77,9 @@ const VideoTile = React.memo<VideoTileProps>(({
       className={`relative overflow-hidden rounded-2xl bg-gray-900 cursor-pointer transition-all duration-300 ${
         isMainView
           ? 'w-full h-full shadow-2xl'
-          : 'w-full h-32 hover:scale-105 hover:ring-4 hover:ring-purple-500/50 shadow-lg'
+          : 'w-full h-28 hover:scale-105 hover:ring-4 hover:ring-purple-500/50 shadow-lg'
       }`}
-      whileHover={!isMainView ? { scale: 1.05 } : undefined}
+      whileHover={!isMainView ? { scale: 1.02 } : undefined}
       whileTap={!isMainView ? { scale: 0.98 } : undefined}
     >
       {stream ? (
@@ -111,11 +124,78 @@ const VideoTile = React.memo<VideoTileProps>(({
 VideoTile.displayName = 'VideoTile';
 
 // =====================================================
+// ATTENDANCE REQUEST MODAL
+// =====================================================
+interface AttendanceModalProps {
+  request: AttendanceRequest | null;
+  onAccept: (requestId: string, studentId: string) => void;
+  onReject: (requestId: string, studentId: string) => void;
+}
+
+const AttendanceModal: React.FC<AttendanceModalProps> = ({ request, onAccept, onReject }) => {
+  if (!request) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center"
+      >
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.9, opacity: 0 }}
+          className="bg-gray-800 border border-gray-700 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl"
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-12 h-12 bg-blue-500/20 rounded-full flex items-center justify-center">
+              <Bell className="w-6 h-6 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-white">Attendance Request</h3>
+              <p className="text-gray-400 text-sm">{new Date(request.timestamp).toLocaleTimeString()}</p>
+            </div>
+          </div>
+
+          <p className="text-white text-lg mb-6">
+            <span className="font-semibold text-blue-400">{request.studentName}</span> requested attendance
+          </p>
+
+          <div className="flex gap-3">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onAccept(request.id, request.studentId)}
+              className="flex-1 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
+            >
+              <CheckCircle className="w-5 h-5" />
+              Accept
+            </motion.button>
+
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onReject(request.id, request.studentId)}
+              className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
+            >
+              <XCircle className="w-5 h-5" />
+              Reject
+            </motion.button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+// =====================================================
 // MAIN VIDEO CHAT COMPONENT
 // =====================================================
 const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   // =====================================================
-  // REFS - Stable references that don't cause re-renders
+  // REFS - Stable references (NO RE-RENDERS)
   // =====================================================
   const localStreamRef = useRef<MediaStream | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -125,7 +205,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   const isConnectingRef = useRef(false);
 
   // =====================================================
-  // STATE - Only what needs to trigger re-renders
+  // STATE - Only what triggers re-renders
   // =====================================================
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
@@ -133,25 +213,35 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('Initializing...');
+  
+  // Attendance state
+  const [pendingRequest, setPendingRequest] = useState<AttendanceRequest | null>(null);
+  const [hasRequestedAttendance, setHasRequestedAttendance] = useState(false);
 
   const isHost = user.role === 'host' || user.role === 'instructor';
   const roomId = session?.roomId || session?._id;
 
   // =====================================================
-  // GET USER MEDIA - ONLY ONCE
+  // GET USER MEDIA - AUDIO + VIDEO - CALLED ONCE
   // =====================================================
   useEffect(() => {
-    console.log('[INIT] Getting user media...');
+    console.log('[INIT] Getting user media with audio and video...');
     let mounted = true;
 
     const initMedia = async () => {
       try {
+        // CRITICAL: Include both audio and video
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { 
+            width: { ideal: 1280 }, 
+            height: { ideal: 720 },
+            facingMode: 'user'
+          },
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true
+            autoGainControl: true,
+            sampleRate: 44100
           }
         });
 
@@ -160,7 +250,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
           return;
         }
 
-        console.log('[INIT] Got local stream');
+        console.log('[INIT] Got local stream with tracks:', stream.getTracks().map(t => `${t.kind} (${t.label})`));
         localStreamRef.current = stream;
         setLocalStream(stream);
 
@@ -171,27 +261,29 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
         setConnectionStatus('Camera ready');
       } catch (err: any) {
         console.error('[INIT] getUserMedia error:', err);
-        toast.error(`Camera access failed: ${err.message}`);
-        setConnectionStatus('Camera failed');
+        toast.error(`Camera/Mic access failed: ${err.message}`);
+        setConnectionStatus('Media failed');
       }
     };
 
     initMedia();
 
-    // Cleanup function - ONLY runs on unmount
     return () => {
       console.log('[CLEANUP] Stopping all tracks');
       mounted = false;
-      localStreamRef.current?.getTracks().forEach(track => track.stop());
+      localStreamRef.current?.getTracks().forEach(track => {
+        console.log(`[CLEANUP] Stopping track: ${track.kind}`);
+        track.stop();
+      });
       localStreamRef.current = null;
     };
-  }, []); // EMPTY DEPENDENCY ARRAY = run once only
+  }, []); // EMPTY DEPS = run once
 
   // =====================================================
-  // SOCKET CONNECTION - ONLY ONCE
+  // SOCKET CONNECTION - INITIALIZED ONCE
   // =====================================================
   useEffect(() => {
-    if (socketRef.current) return; // Prevent double initialization
+    if (socketRef.current) return; // Prevent double init
 
     console.log('[SOCKET] Initializing connection...');
     const socket = io(getSocketUrl(), {
@@ -207,8 +299,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     socket.on('connect', () => {
       console.log('[SOCKET] Connected:', socket.id);
       setConnectionStatus('Connected to server');
-
-      // Auto-join room if we have the session
       if (roomId && !hasJoinedRef.current && !isConnectingRef.current) {
         joinRoom();
       }
@@ -234,18 +324,22 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     socket.on('answer', handleAnswer);
     socket.on('ice-candidate', handleIceCandidate);
 
+    // Attendance events
+    socket.on('attendance-request-received', handleAttendanceRequest);
+    socket.on('attendance-response', handleAttendanceResponse);
+
     return () => {
       console.log('[CLEANUP] Disconnecting socket');
       socket.disconnect();
       socketRef.current = null;
     };
-  }, []); // EMPTY DEPENDENCY ARRAY = run once only
+  }, []); // Run once
 
   // =====================================================
-  // WEBRTC PEER CONNECTION MANAGEMENT
+  // WEBRTC PEER CONNECTION - WITH AUDIO + VIDEO
   // =====================================================
   const createPeerConnection = useCallback((targetUserId: string): RTCPeerConnection => {
-    // CRITICAL: Check if peer already exists - prevent duplicates
+    // CRITICAL: Prevent duplicate peer connections
     if (peersRef.current.has(targetUserId)) {
       console.log(`[WEBRTC] Peer for ${targetUserId} already exists, reusing`);
       return peersRef.current.get(targetUserId)!;
@@ -261,28 +355,39 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
       ]
     });
 
-    // Add local stream tracks
+    // CRITICAL: Add ALL local stream tracks (audio + video)
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
+      const tracks = localStreamRef.current.getTracks();
+      console.log(`[WEBRTC] Adding ${tracks.length} tracks to peer connection`);
+      
+      tracks.forEach(track => {
         if (localStreamRef.current) {
+          console.log(`[WEBRTC] Adding ${track.kind} track`);
           pc.addTrack(track, localStreamRef.current);
         }
       });
     }
 
-    // Handle remote stream
+    // CRITICAL: Handle incoming remote stream
     pc.ontrack = (event) => {
-      console.log(`[WEBRTC] Received remote stream from ${targetUserId}`);
-      const [remoteStream] = event.streams;
+      console.log(`[WEBRTC] 🎥 ontrack fired for ${targetUserId}!`, event.streams);
+      
+      if (event.streams && event.streams[0]) {
+        const remoteStream = event.streams[0];
+        console.log(`[WEBRTC] Remote stream received from ${targetUserId}:`, 
+          remoteStream.getTracks().map(t => t.kind));
 
-      setParticipants(prev => {
-        const updated = new Map(prev);
-        const participant = updated.get(targetUserId);
-        if (participant) {
-          updated.set(targetUserId, { ...participant, stream: remoteStream });
-        }
-        return updated;
-      });
+        // CRITICAL: Update participant with received stream
+        setParticipants(prev => {
+          const updated = new Map(prev);
+          const participant = updated.get(targetUserId);
+          if (participant) {
+            console.log(`[WEBRTC] Updating participant ${targetUserId} with stream`);
+            updated.set(targetUserId, { ...participant, stream: remoteStream });
+          }
+          return updated;
+        });
+      }
     };
 
     // Handle ICE candidates
@@ -296,7 +401,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
       }
     };
 
-    // Connection state logging
     pc.onconnectionstatechange = () => {
       console.log(`[WEBRTC] Connection state with ${targetUserId}: ${pc.connectionState}`);
     };
@@ -321,7 +425,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   }, []);
 
   // =====================================================
-  // WEBRTC SIGNALING HANDLERS
+  // WEBRTC SIGNALING
   // =====================================================
   const initiateCall = useCallback(async (targetUserId: string) => {
     try {
@@ -407,7 +511,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     // Initiate calls to existing participants
     if (data.participants) {
       data.participants.forEach((participant: any) => {
-        // Add to participants map first
         setParticipants(prev => {
           const updated = new Map(prev);
           updated.set(participant.userId, {
@@ -419,7 +522,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
           return updated;
         });
 
-        // Then initiate call
+        // Small delay to ensure peer is created
         setTimeout(() => {
           initiateCall(participant.userId);
         }, 500);
@@ -459,13 +562,80 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
 
     removePeer(userId);
     toast.success('Someone left the meeting');
-
-    // If focused user left, clear selection
     setSelectedUserId(prev => prev === userId ? null : prev);
   }, [removePeer]);
 
   // =====================================================
-  // JOIN ROOM FUNCTION
+  // ATTENDANCE HANDLERS
+  // =====================================================
+  const handleAttendanceRequest = useCallback((data: any) => {
+    console.log('[ATTENDANCE] Request received:', data);
+    if (isHost) {
+      setPendingRequest({
+        id: data.requestId,
+        studentId: data.studentId,
+        studentName: data.studentName,
+        timestamp: data.timestamp
+      });
+    }
+  }, [isHost]);
+
+  const handleAttendanceResponse = useCallback((data: any) => {
+    console.log('[ATTENDANCE] Response received:', data);
+    if (data.studentId === user._id) {
+      if (data.accepted) {
+        toast.success('✅ Your attendance request was accepted!');
+      } else {
+        toast.error('❌ Your attendance request was rejected');
+      }
+      setHasRequestedAttendance(false);
+    }
+  }, [user._id]);
+
+  const requestAttendance = useCallback(() => {
+    if (hasRequestedAttendance) {
+      toast.success('You already requested attendance');
+      return;
+    }
+
+    console.log('[ATTENDANCE] Sending request...');
+    socketRef.current?.emit('attendance-request', {
+      studentId: user._id,
+      studentName: user.name,
+      roomId,
+      timestamp: Date.now()
+    });
+
+    setHasRequestedAttendance(true);
+    toast.success('Attendance request sent to host');
+  }, [hasRequestedAttendance, user._id, user.name, roomId]);
+
+  const acceptAttendance = useCallback((requestId: string, studentId: string) => {
+    console.log('[ATTENDANCE] Accepting request:', requestId);
+    socketRef.current?.emit('attendance-response', {
+      requestId,
+      studentId,
+      roomId,
+      accepted: true,
+      timestamp: Date.now()
+    });
+    setPendingRequest(null);
+  }, [roomId]);
+
+  const rejectAttendance = useCallback((requestId: string, studentId: string) => {
+    console.log('[ATTENDANCE] Rejecting request:', requestId);
+    socketRef.current?.emit('attendance-response', {
+      requestId,
+      studentId,
+      roomId,
+      accepted: false,
+      timestamp: Date.now()
+    });
+    setPendingRequest(null);
+  }, [roomId]);
+
+  // =====================================================
+  // JOIN / LEAVE ROOM
   // =====================================================
   const joinRoom = useCallback(() => {
     if (!socketRef.current || !roomId || hasJoinedRef.current || isConnectingRef.current) {
@@ -486,20 +656,15 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     });
   }, [roomId, user._id, user.name, user.role]);
 
-  // =====================================================
-  // LEAVE ROOM FUNCTION
-  // =====================================================
   const leaveRoom = useCallback(() => {
     console.log('[ROOM] Leaving room');
 
-    // Close all peer connections
     peersRef.current.forEach((pc, userId) => {
       pc.close();
       console.log(`[WEBRTC] Closed connection with ${userId}`);
     });
     peersRef.current.clear();
 
-    // Notify server
     if (socketRef.current && roomId) {
       socketRef.current.emit('leave-room', {
         roomId,
@@ -507,7 +672,6 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
       });
     }
 
-    // Clear participants
     setParticipants(new Map());
     hasJoinedRef.current = false;
     isConnectingRef.current = false;
@@ -539,13 +703,13 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
   }, []);
 
   // =====================================================
-  // DERIVED STATE FOR UI
+  // DERIVED STATE - PARTICIPANT LIST
   // =====================================================
-  const allParticipants = React.useMemo(() => {
+  const allParticipants = useMemo(() => {
     const list: Array<{
       userId: string;
       socketId: string;
-      stream?: MediaStream | null;
+      stream?: MediaStream;
       isLocal: boolean;
       isHost: boolean;
       name: string;
@@ -555,7 +719,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     list.push({
       userId: user._id,
       socketId: 'local',
-      stream: localStream,
+      stream: localStream || undefined,
       isLocal: true,
       isHost,
       name: user.name || 'You'
@@ -578,8 +742,8 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     return list;
   }, [participants, localStream, user._id, user.name, isHost]);
 
-  // Determine main and grid videos (Zoom-like layout)
-  const mainParticipant = React.useMemo(() => {
+  // Zoom-like layout: main video + grid
+  const mainParticipant = useMemo(() => {
     if (selectedUserId) {
       return allParticipants.find(p => p.userId === selectedUserId) || allParticipants[0];
     }
@@ -588,7 +752,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     return remote || allParticipants[0];
   }, [allParticipants, selectedUserId]);
 
-  const gridParticipants = React.useMemo(() => {
+  const gridParticipants = useMemo(() => {
     return allParticipants.filter(p => p.userId !== mainParticipant?.userId);
   }, [allParticipants, mainParticipant]);
 
@@ -608,6 +772,13 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
+      {/* Attendance Modal for Host */}
+      <AttendanceModal
+        request={pendingRequest}
+        onAccept={acceptAttendance}
+        onReject={rejectAttendance}
+      />
+
       {/* Header */}
       <header className="bg-gray-900 border-b border-gray-800 px-6 py-4">
         <div className="flex items-center justify-between">
@@ -618,10 +789,30 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Attendance Request Button - Student Only */}
+            {!isHost && !hasRequestedAttendance && (
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={requestAttendance}
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg flex items-center gap-2"
+              >
+                <Bell className="w-4 h-4" />
+                Request Attendance
+              </motion.button>
+            )}
+
+            {!isHost && hasRequestedAttendance && (
+              <span className="px-4 py-2 bg-yellow-500/20 text-yellow-300 rounded-lg text-sm">
+                Request sent...
+              </span>
+            )}
+
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 rounded-lg">
               <Users className="w-4 h-4 text-gray-400" />
               <span className="text-gray-300 text-sm">{allParticipants.length}</span>
             </div>
+            
             <button
               onClick={onLogout}
               className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
@@ -632,7 +823,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
         </div>
       </header>
 
-      {/* Main Video Area */}
+      {/* Main Video Area - Zoom Layout */}
       <main className="flex-1 flex flex-col lg:flex-row gap-4 p-4 overflow-hidden">
         {/* Large Main Video */}
         <div className="flex-1 min-h-0">
@@ -640,7 +831,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
             {mainParticipant && (
               <VideoTile
                 key={mainParticipant.userId}
-                stream={mainParticipant.stream || null}
+                stream={mainParticipant.stream}
                 userId={mainParticipant.userId}
                 isLocal={mainParticipant.isLocal}
                 isHost={mainParticipant.isHost}
@@ -656,7 +847,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
           {gridParticipants.map((participant) => (
             <div key={participant.userId} className="flex-shrink-0 w-40 lg:w-full">
               <VideoTile
-                stream={participant.stream || null}
+                stream={participant.stream}
                 userId={participant.userId}
                 isLocal={participant.isLocal}
                 isHost={participant.isHost}
@@ -682,11 +873,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
                 : 'bg-gray-700 hover:bg-gray-600'
             }`}
           >
-            {isMuted ? (
-              <MicOff className="w-6 h-6 text-white" />
-            ) : (
-              <Mic className="w-6 h-6 text-white" />
-            )}
+            {isMuted ? <MicOff className="w-6 h-6 text-white" /> : <Mic className="w-6 h-6 text-white" />}
           </motion.button>
 
           {/* Video Button */}
@@ -700,11 +887,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
                 : 'bg-gray-700 hover:bg-gray-600'
             }`}
           >
-            {isVideoOff ? (
-              <CameraOff className="w-6 h-6 text-white" />
-            ) : (
-              <Camera className="w-6 h-6 text-white" />
-            )}
+            {isVideoOff ? <CameraOff className="w-6 h-6 text-white" /> : <Camera className="w-6 h-6 text-white" />}
           </motion.button>
 
           {/* Leave Button */}
@@ -719,7 +902,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
         </div>
       </footer>
 
-      {/* Hidden local video for self-view if needed */}
+      {/* Hidden local video ref */}
       <video
         ref={myVideoRef}
         autoPlay

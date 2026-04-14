@@ -3,6 +3,7 @@ const { Server } = require('socket.io');
 // In-memory stores
 const roomUsers = new Map(); // roomId -> Map<userId, { socketId, userInfo, joinedAt }>
 const socketToRoom = new Map(); // socketId -> roomId
+const attendanceRequests = new Map(); // roomId -> Array of requests
 
 function getRoomUsers(roomId) {
   if (!roomUsers.has(roomId)) {
@@ -37,6 +38,7 @@ function removeSocketFromRoom(socketId) {
     for (const [userId, userData] of users.entries()) {
       if (userData.socketId === socketId) {
         removeUserFromRoom(roomId, userId);
+        socketToRoom.delete(socketId);
         return { roomId, userId, userData };
       }
     }
@@ -228,6 +230,94 @@ function initSocketIO(server) {
           candidate,
           timestamp: new Date()
         });
+      }
+    });
+
+    // =====================================================
+    // ATTENDANCE REQUEST SYSTEM
+    // =====================================================
+
+    socket.on('attendance-request', (data) => {
+      const { studentId, studentName, roomId, timestamp } = data;
+
+      if (!studentId || !roomId) {
+        console.error('[ATTENDANCE] Invalid request data');
+        socket.emit('attendance-error', { message: 'Invalid request data' });
+        return;
+      }
+
+      console.log(`[ATTENDANCE] Request from ${studentName} (${studentId}) in room ${roomId}`);
+
+      // Store request
+      const requestId = `req_${Date.now()}_${studentId}`;
+      const request = {
+        id: requestId,
+        studentId,
+        studentName,
+        timestamp,
+        status: 'pending'
+      };
+
+      if (!attendanceRequests.has(roomId)) {
+        attendanceRequests.set(roomId, []);
+      }
+      attendanceRequests.get(roomId).push(request);
+
+      // Notify host(s) in the room
+      socket.to(roomId).emit('attendance-request-received', {
+        requestId,
+        studentId,
+        studentName,
+        timestamp,
+        roomId
+      });
+
+      // Confirm to student
+      socket.emit('attendance-request-confirmation', {
+        requestId,
+        message: 'Request sent to host'
+      });
+
+      console.log(`[ATTENDANCE] Request ${requestId} stored and broadcast to room ${roomId}`);
+    });
+
+    socket.on('attendance-response', (data) => {
+      const { requestId, studentId, roomId, accepted, timestamp } = data;
+
+      console.log(`[ATTENDANCE] Response for ${studentId}: ${accepted ? 'ACCEPTED' : 'REJECTED'}`);
+
+      // Find and update request
+      const requests = attendanceRequests.get(roomId) || [];
+      const requestIndex = requests.findIndex(r => r.id === requestId);
+
+      if (requestIndex !== -1) {
+        requests[requestIndex].status = accepted ? 'accepted' : 'rejected';
+      }
+
+      // Get room users to find student socket
+      const roomUsers = getRoomUsers(roomId);
+      const studentData = roomUsers.get(studentId);
+
+      if (studentData) {
+        // Send directly to student
+        io.to(studentData.socketId).emit('attendance-response', {
+          requestId,
+          studentId,
+          accepted,
+          message: accepted ? 'Your attendance was accepted' : 'Your attendance was rejected',
+          timestamp
+        });
+        console.log(`[ATTENDANCE] Response sent directly to student ${studentId} at socket ${studentData.socketId}`);
+      } else {
+        // Fallback: broadcast to room
+        socket.to(roomId).emit('attendance-response', {
+          requestId,
+          studentId,
+          accepted,
+          message: accepted ? 'Your attendance was accepted' : 'Your attendance was rejected',
+          timestamp
+        });
+        console.log(`[ATTENDANCE] Response broadcast to room ${roomId}`);
       }
     });
 
