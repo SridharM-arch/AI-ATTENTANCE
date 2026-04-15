@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Camera, CameraOff, PhoneOff, Users, Crown, CheckCircle, XCircle, Bell } from 'lucide-react';
+import { Mic, MicOff, Camera, CameraOff, PhoneOff, Crown, CheckCircle, XCircle, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { getSocketUrl, getBackendUrl } from '../config';
