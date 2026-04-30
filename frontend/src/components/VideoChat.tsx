@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Camera, CameraOff, PhoneOff, Crown, CheckCircle, XCircle, Bell } from 'lucide-react';
+import { Mic, MicOff, Camera, CameraOff, PhoneOff, Users, Crown, CheckCircle, XCircle, Bell } from 'lucide-react';
 import io from 'socket.io-client';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 import { getSocketUrl, getBackendUrl } from '../config';
 import type { Session, User } from '../types';
 import axios from 'axios';
@@ -196,7 +196,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
         localStreamRef.current = stream;
         setLocalStream(stream);
       } catch (err: any) {
-        toast.error(`Camera/Mic access failed: ${err.message}`);
+        brandedToast.error(`Camera/Mic access failed: ${err.message}`);
       }
     };
 
@@ -437,7 +437,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
 
   const handleAttendanceResponse = useCallback((data: any) => {
     if (data.studentId === user._id) {
-      toast.success(data.accepted ? 'Attendance accepted!' : 'Attendance rejected');
+      brandedToast.success(data.accepted ? 'Attendance accepted!' : 'Attendance rejected');
       setHasRequestedAttendance(false);
     }
   }, [user._id]);
@@ -451,7 +451,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
       timestamp: Date.now()
     });
     setHasRequestedAttendance(true);
-    toast.success('Request sent');
+    brandedToast.success('Request sent');
   }, [hasRequestedAttendance, user._id, user.name, roomId]);
 
   const acceptAttendance = useCallback(async (requestId: string, studentId: string) => {
@@ -465,9 +465,9 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
       socketRef.current?.emit('attendance-response', {
         requestId, studentId, roomId, accepted: true, timestamp: Date.now()
       });
-      toast.success('Attendance marked');
+      brandedToast.success('Attendance marked');
     } catch (error) {
-      toast.error('Failed to mark attendance');
+      brandedToast.error('Failed to mark attendance');
     }
     setPendingRequest(null);
   }, [roomId, session._id]);
@@ -476,7 +476,7 @@ const VideoChat: React.FC<VideoChatProps> = ({ user, session, onLogout }) => {
     socketRef.current?.emit('attendance-response', {
       requestId, studentId, roomId, accepted: false, timestamp: Date.now()
     });
-    toast.success('Request rejected');
+    brandedToast.success('Request rejected');
     setPendingRequest(null);
   }, [roomId]);
 

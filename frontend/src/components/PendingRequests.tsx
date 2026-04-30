@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle, XCircle, Clock, Bell, ChevronDown } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 
 interface AttendanceRequest {
   id: string;
@@ -33,9 +33,9 @@ export const PendingRequests: React.FC<PendingRequestsProps> = ({
     setApproving(prev => ({ ...prev, [requestId]: true }));
     try {
       onApprove(requestId, studentId);
-      toast.success('Request approved');
+      brandedToast.success('Request approved');
     } catch (error) {
-      toast.error('Failed to approve request');
+      brandedToast.error('Failed to approve request');
     } finally {
       setApproving(prev => ({ ...prev, [requestId]: false }));
     }
@@ -45,9 +45,9 @@ export const PendingRequests: React.FC<PendingRequestsProps> = ({
     setRejecting(prev => ({ ...prev, [requestId]: true }));
     try {
       onReject(requestId, studentId);
-      toast.success('Request rejected');
+      brandedToast.success('Request rejected');
     } catch (error) {
-      toast.error('Failed to reject request');
+      brandedToast.error('Failed to reject request');
     } finally {
       setRejecting(prev => ({ ...prev, [requestId]: false }));
     }

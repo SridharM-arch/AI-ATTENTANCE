@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Toaster } from 'react-hot-toast';
+import { Toaster, toast, type Toast } from 'react-hot-toast';
 import Landing from './components/Landing';
 import HostLogin from './components/HostLogin';
 import StudentJoin from './components/StudentJoin';
@@ -9,6 +9,48 @@ import VideoChat from './components/VideoChat';
 import SplashScreen from './components/SplashScreen';
 import { ThemeProvider } from './components/ThemeProvider';
 import type { User, Session } from './types';
+
+// Custom Toast with CT Logo
+const LogoToast = ({ t, message }: { t: Toast; message: string; type: 'success' | 'error' | 'info' }) => {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -20, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -20, scale: 0.9 }}
+      className={`${
+        t.visible ? 'animate-enter' : 'animate-leave'
+      } max-w-md w-full bg-white/95 backdrop-blur-lg shadow-lg rounded-xl pointer-events-auto flex items-center gap-3 p-3 border border-white/20`}
+    >
+      {/* CT Logo */}
+      <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center">
+        <span className="text-white font-black text-lg">CT</span>
+      </div>
+      
+      {/* Message */}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-800">{message}</p>
+        <p className="text-xs text-gray-500">Connect Together</p>
+      </div>
+      
+      {/* Close button */}
+      <button
+        onClick={() => toast.dismiss(t.id)}
+        className="flex-shrink-0 p-1 hover:bg-gray-100 rounded-full transition-colors"
+      >
+        <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </motion.div>
+  );
+};
+
+// Branded toast utility
+export const brandedToast = {
+  success: (message: string) => toast.custom((t) => <LogoToast t={t} message={message} type="success" />),
+  error: (message: string) => toast.custom((t) => <LogoToast t={t} message={message} type="error" />),
+  info: (message: string) => toast.custom((t) => <LogoToast t={t} message={message} type="info" />),
+};
 
 function App() {
   const [currentView, setCurrentView] = useState<'splash' | 'landing' | 'hostLogin' | 'studentJoin' | 'dashboard' | 'video'>('splash');
@@ -175,14 +217,10 @@ function App() {
         </AnimatePresence>
         <Toaster
           position="top-right"
-          toastOptions={{
-            duration: 4000,
-            style: {
-              background: 'rgba(255, 255, 255, 0.9)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              color: '#1f2937',
-            },
+          gutter={12}
+          containerStyle={{
+            top: 20,
+            right: 20,
           }}
         />
       </div>

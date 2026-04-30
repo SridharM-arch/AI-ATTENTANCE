@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 import { ArrowLeft, LogIn, Loader } from 'lucide-react';
 import type { Session } from '../types';
 import { getBackendUrl } from '../config';
@@ -20,7 +20,7 @@ const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
 
   if (!sessionCode.trim()) {
-    toast.error("Please enter a room ID");
+    brandedToast.error("Please enter a room ID");
     return;
   }
 
@@ -33,7 +33,7 @@ const handleSubmit = async (e: React.FormEvent) => {
     
     if (response.data && response.data.isActive) {
       setStatus('valid');
-      toast.success('Joining session...');
+      brandedToast.success('Joining session...');
       
       // Pass the real session data
       onJoin({
@@ -45,16 +45,16 @@ const handleSubmit = async (e: React.FormEvent) => {
       } as Session);
     } else {
       setStatus('invalid');
-      toast.error('Session is not active or does not exist');
+      brandedToast.error('Session is not active or does not exist');
     }
   } catch (error: any) {
     console.error('[JOIN] Failed to validate session:', error);
     setStatus('invalid');
     
     if (error.response?.status === 404) {
-      toast.error('Session not found. Please check the Room ID.');
+      brandedToast.error('Session not found. Please check the Room ID.');
     } else {
-      toast.error(error.response?.data?.error || 'Failed to join session');
+      brandedToast.error(error.response?.data?.error || 'Failed to join session');
     }
   } finally {
     setLoading(false);

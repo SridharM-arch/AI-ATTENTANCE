@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 import { ArrowLeft, Mail, Lock, UserPlus } from 'lucide-react';
 import type { User } from '../types';
 
@@ -18,12 +18,12 @@ const HostLogin = ({ onLogin, onBack }: Props) => {
 
   const handleSubmit = async () => {
     if (!email || !password) {
-      toast.error('Please fill in all fields');
+      brandedToast.error('Please fill in all fields');
       return;
     }
 
     if (isRegister && !name) {
-      toast.error('Please enter your name');
+      brandedToast.error('Please enter your name');
       return;
     }
 
@@ -46,24 +46,24 @@ const HostLogin = ({ onLogin, onBack }: Props) => {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || (isRegister ? 'Registration failed' : 'Login failed'));
+        brandedToast.error(data.error || (isRegister ? 'Registration failed' : 'Login failed'));
         setLoading(false);
         return;
       }
 
       if (isRegister) {
-        toast.success('Registration successful! Please log in.');
+        brandedToast.success('Registration successful! Please log in.');
         setIsRegister(false);
         setEmail('');
         setPassword('');
         setName('');
       } else {
         localStorage.setItem('token', data.token);
-        toast.success('Login successful!');
+        brandedToast.success('Login successful!');
         onLogin(data.user);
       }
     } catch (error) {
-      toast.error('Server error. Please try again.');
+      brandedToast.error('Server error. Please try again.');
     } finally {
       setLoading(false);
     }

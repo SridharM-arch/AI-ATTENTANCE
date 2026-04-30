@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogOut, Users, Calendar, TrendingUp, Crown, Camera, Play, Square, FileText, Sun, Moon } from 'lucide-react';
 import axios from 'axios';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 import { useTheme } from './ThemeProvider';
 import { Card, StatCard, Button, Input, FileDropzone } from './ui';
 import { StudentCard } from './StudentCard';
@@ -85,18 +85,18 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
     setEnrolledStudents((prevStudents) =>
       prevStudents.filter((s) => s.id !== studentId)
     );
-    toast.success('Student deleted successfully');
+    brandedToast.success('Student deleted successfully');
   };
 
   // Update student handler (with validation)
   const handleUpdateStudent = (updatedStudent: Student) => {
     // Check for duplicate ID
     if (studentIdExists(updatedStudent.studentId, updatedStudent.id)) {
-      toast.error('This Student ID is already in use');
+      brandedToast.error('This Student ID is already in use');
       return false;
     }
     addStudent(updatedStudent);
-    toast.success('Student updated successfully');
+    brandedToast.success('Student updated successfully');
     return true;
   };
 
@@ -150,7 +150,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
   const createSession = async () => {
     if (!newSessionTitle.trim()) {
-      toast.error('Please enter a session title');
+      brandedToast.error('Please enter a session title');
       return;
     }
 
@@ -167,21 +167,19 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       setNewSessionDuration(60);
       setNewSessionMinType('percentage');
       setNewSessionMinValue(75);
-      toast.success('Session created successfully!');
+      brandedToast.success('Session created successfully!');
     } catch (error: any) {
       console.error('Failed to create session', error);
       if (axios.isAxiosError(error)) {
         // Handle 409 Conflict - Active session exists
         if (error.response?.status === 409) {
           const existingSession = error.response?.data?.existingSession;
-          toast.error(`Active session already exists: "${existingSession?.title}" (Room: ${existingSession?.roomId})`, {
-            duration: 5000
-          });
+          brandedToast.error(`Active session already exists: "${existingSession?.title}" (Room: ${existingSession?.roomId})`);
         } else {
-          toast.error(error.response?.data?.error || error.response?.data?.message || 'Failed to create session');
+          brandedToast.error(error.response?.data?.error || error.response?.data?.message || 'Failed to create session');
         }
       } else {
-        toast.error('Failed to create session');
+        brandedToast.error('Failed to create session');
       }
     }
   };
@@ -190,10 +188,10 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
     try {
       await axios.post(`${getBackendUrl()}/api/sessions/${sessionId}/end`, {}, getAuthHeaders());
       fetchSessions();
-      toast.success('Session ended successfully!');
+      brandedToast.success('Session ended successfully!');
     } catch (error) {
       console.error('Failed to end session', error);
-      toast.error('Failed to end session');
+      brandedToast.error('Failed to end session');
     }
   };
 
@@ -220,21 +218,21 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       // Show prompt for name and ID
       const studentName = prompt('Enter student name:');
       if (!studentName) {
-        toast.error('Student name is required');
+        brandedToast.error('Student name is required');
         setEnrolling(false);
         return;
       }
 
       const studentId = prompt('Enter student ID:');
       if (!studentId) {
-        toast.error('Student ID is required');
+        brandedToast.error('Student ID is required');
         setEnrolling(false);
         return;
       }
 
       // Check for duplicate ID
       if (studentIdExists(studentId)) {
-        toast.error('This Student ID is already in use');
+        brandedToast.error('This Student ID is already in use');
         setEnrolling(false);
         return;
       }
@@ -249,15 +247,15 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       };
 
       addStudent(newStudent);
-      toast.success('Student enrolled successfully!');
+      brandedToast.success('Student enrolled successfully!');
     } catch (error: any) {
       console.error('Face enrollment failed:', error);
       if (error.name === 'NotAllowedError') {
-        toast.error('Camera access denied. Please allow camera permissions.');
+        brandedToast.error('Camera access denied. Please allow camera permissions.');
       } else if (error.name === 'NotFoundError') {
-        toast.error('No camera found. Please connect a camera device.');
+        brandedToast.error('No camera found. Please connect a camera device.');
       } else {
-        toast.error('Face enrollment failed. Please try again.');
+        brandedToast.error('Face enrollment failed. Please try again.');
       }
     } finally {
       setEnrolling(false);
@@ -282,7 +280,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
 
           // Validate unique ID
           if (studentIdExists(fileName)) {
-            toast.error(`Student ID "${fileName}" already exists. Skipping this file.`);
+            brandedToast.error(`Student ID "${fileName}" already exists. Skipping this file.`);
             return;
           }
 
@@ -301,7 +299,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
         fileReader.readAsDataURL(file);
       }
 
-      toast.success(`Added ${files.length} student image(s)!`);
+      brandedToast.success(`Added ${files.length} student image(s)!`);
 
       // Optional: Also upload to backend for face recognition
       try {
@@ -323,7 +321,7 @@ const HostDashboard: React.FC<HostDashboardProps> = ({ user, onLogout, onStartSe
       }
     } catch (error: any) {
       console.error('Upload failed:', error);
-      toast.error('Upload failed. Please try again.');
+      brandedToast.error('Upload failed. Please try again.');
     } finally {
       setUploading(false);
     }

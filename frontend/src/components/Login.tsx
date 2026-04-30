@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { LogIn, UserPlus, Mail, Lock, User, UserCheck, AlertCircle } from 'lucide-react';
 import axios from 'axios';
-import toast from 'react-hot-toast';
+import { brandedToast } from '../App';
 
 interface LoginProps {
   onLogin: (user: any) => void;
@@ -28,7 +28,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       const res = await axios.post(`https://ai-attentance.onrender.com${endpoint}`, data);
       
       if (isRegister) {
-        toast.success('Account created! Please sign in.');
+        brandedToast.success('Account created! Please sign in.');
         setIsRegister(false);
         setEmail('');
         setPassword('');
@@ -36,13 +36,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       } else {
         localStorage.setItem('token', res.data.token);
         localStorage.setItem('user', JSON.stringify(res.data.user));
-        toast.success(`Welcome ${res.data.user.name}!`);
+        brandedToast.success(`Welcome ${res.data.user.name}!`);
         onLogin(res.data.user);
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || 'An error occurred';
       setError(errorMsg);
-      toast.error(errorMsg);
+      brandedToast.error(errorMsg);
     } finally {
       setLoading(false);
     }
